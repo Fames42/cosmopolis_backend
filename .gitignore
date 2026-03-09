@@ -1,0 +1,26 @@
+# Frontend (separate repo)
+frontend/
+
+# Analytics data
+analytics/conversations/
+analytics/chats.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Database
+*.db
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Claude
+.claude/

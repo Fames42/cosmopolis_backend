@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cosmopolis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cosmopolis_dev}
+      POSTGRES_DB: cosmopolis
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cosmopolis"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://cosmopolis:${POSTGRES_PASSWORD:-cosmopolis_dev}@db:5432/cosmopolis
+      SECRET_KEY: ${SECRET_KEY:-change_me_in_production}
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
