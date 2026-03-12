@@ -1,17 +1,15 @@
-# Cosmopolis Agent
+# Cosmopolis
 
-AI-powered property management maintenance request system. Tenants submit requests via WhatsApp, an AI agent triages and classifies them, and dispatchers/technicians manage tickets through a web dashboard.
+AI-powered property management system. Tenants submit maintenance requests via WhatsApp, an AI agent triages and classifies them, and dispatchers/technicians manage tickets through a web dashboard.
 
 ## Project Structure
 
 ```
-cosmopolis_agent/
-├── backend/       # FastAPI REST API (Python, SQLAlchemy, JWT auth)
-├── frontend/      # Next.js 16 dashboard (React 19, TypeScript, Tailwind 4)
-├── analytics/     # WhatsApp data extraction scripts (GreenAPI)
-├── rules.txt      # AI system prompt for maintenance router
-├── cosmopolis.db  # SQLite database (dev)
-└── .env           # Environment variables (WhatsApp API keys, OpenAI token)
+cosmopolis/
+├── backend/       # FastAPI REST API (Python, SQLAlchemy, JWT auth) → see backend/CLAUDE.md
+├── frontend/      # Next.js 16 dashboard (React 19, TypeScript, Tailwind 4) → see frontend/CLAUDE.md
+├── .env           # Environment variables (WhatsApp API keys, OpenAI token)
+└── CLAUDE.md      # This file
 ```
 
 ## Quick Start
@@ -45,12 +43,12 @@ python -m backend.seed_db
 - **Ticket statuses**: new → assigned → scheduled → done | cancelled
 - **Ticket categories**: plumbing, electrical, heating, appliance, structural, other
 - **Urgency levels**: low, medium, high, emergency
+- **Ports**: backend on 8000, frontend on 3000
 - **API docs**: Auto-generated at `/docs` (Swagger) and `/redoc`
 
 ## Important Notes
 
-- Backend API runs on port 8000, frontend on port 3000
-- Frontend stores JWT token and role in localStorage
+- Frontend stores JWT token and role in `localStorage`
 - CORS is currently open (`*`) — restrict for production
 - JWT secret is hardcoded in `backend/auth.py` — move to env var for production
 - SQLite is used for dev; switch to PostgreSQL for production via `backend/database.py`

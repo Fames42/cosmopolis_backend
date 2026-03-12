@@ -13,6 +13,7 @@ __pycache__/
 
 # Database
 *.db
+backups/
 
 # Environment
 .env
