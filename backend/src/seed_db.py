@@ -1,6 +1,6 @@
-from backend.database import SessionLocal, engine
-from backend.models import Base, User, RoleEnum, Building, Tenant, Ticket, TicketStatusEnum, TicketNote
-from backend.auth import get_password_hash
+from src.database import SessionLocal, engine
+from src.models import Base, User, RoleEnum, Building, Tenant, Ticket, TicketStatusEnum, TicketNote
+from src.auth import get_password_hash
 from datetime import datetime, timezone, timedelta
 import uuid
 
