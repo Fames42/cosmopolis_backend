@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .database import engine
 from .models import Base
-from .routers import users, tickets, conversations, analytics, technicians, agents
+from .routers import users, tickets, conversations, analytics, technicians, agents, webhook
 from .auth import router as auth_router
 
 logger = logging.getLogger("uvicorn.error")
@@ -50,6 +50,7 @@ app.include_router(conversations.router, prefix="/api/conversations", tags=["con
 app.include_router(analytics.router, prefix="/api/analytics", tags=["analytics"])
 app.include_router(technicians.router, prefix="/api/technicians", tags=["technicians"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
+app.include_router(webhook.router, prefix="/api/webhook", tags=["webhook"])
 
 # Serve the frontend application (skip in Docker where frontend is deployed separately)
 if os.path.isdir("frontend"):

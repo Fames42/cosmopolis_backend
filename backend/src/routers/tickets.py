@@ -115,7 +115,7 @@ def update_ticket(
         try:
             ticket.status = models.TicketStatusEnum(status_str)
         except ValueError:
-            pass 
+            raise HTTPException(status_code=400, detail=f"Invalid status: {ticket_update['status']}")
     
     if "assignedTo" in ticket_update:
         assignee_name = ticket_update["assignedTo"]
@@ -140,7 +140,7 @@ def update_ticket(
             else:
                 ticket.scheduled_time = None
         except ValueError:
-            pass
+            raise HTTPException(status_code=400, detail=f"Invalid date format: {ticket_update['scheduledDate']}")
 
     db.commit()
     db.refresh(ticket)

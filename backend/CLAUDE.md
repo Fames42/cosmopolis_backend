@@ -1,36 +1,33 @@
-# Cosmopolis Agent
+# Cosmopolis Backend
 
-AI-powered property management maintenance request system. Tenants submit requests via WhatsApp, an AI agent triages and classifies them, and dispatchers/technicians manage tickets through a web dashboard.
+FastAPI REST API with AI-powered WhatsApp agent. Runs in Docker (PostgreSQL + gunicorn/uvicorn).
 
 ## Project Structure
 
 ```
-cosmopolis_agent/
-├── backend/       # FastAPI REST API (Python, SQLAlchemy, JWT auth)
-├── frontend/      # Next.js 16 dashboard (React 19, TypeScript, Tailwind 4)
-├── analytics/     # WhatsApp data extraction scripts (GreenAPI)
-├── rules.txt      # AI system prompt for maintenance router
-├── cosmopolis.db  # SQLite database (dev)
-└── .env           # Environment variables (WhatsApp API keys, OpenAI token)
+backend/
+├── src/                # Python package (module name: src)
+│   ├── main.py         # App setup, CORS, route registration
+│   ├── database.py     # SQLAlchemy engine, SessionLocal, Base
+│   ├── models.py       # ORM models + enums
+│   ├── schemas.py      # Pydantic request/response schemas
+│   ├── auth.py         # JWT + RBAC + password hashing
+│   ├── seed_db.py      # Database seeder
+│   ├── routers/        # API route handlers
+│   └── services/       # AI agent (classifier, orchestrator)
+├── rules.txt           # AI agent system prompt
+├── requirements.txt
+├── Dockerfile
+└── docker-compose.yml
 ```
 
-## Quick Start
+## Running (Docker)
 
-### Backend
 ```bash
-source .venv/bin/activate
-uvicorn backend.main:app --reload --port 8000
-```
-
-### Frontend
-```bash
-cd frontend
-npm run dev    # http://localhost:3000
-```
-
-### Seed Database
-```bash
-python -m backend.seed_db
+docker compose up --build -d                              # start
+docker compose run --rm backend python -m src.seed_db     # seed DB
+docker compose logs backend --tail 50                     # logs
+docker compose down                                       # stop
 ```
 
 ## Test Credentials
@@ -38,20 +35,34 @@ python -m backend.seed_db
 - Owner: `owner@cosmopolis.com` / `owner123`
 - Dispatcher: `dispatcher@cosmopolis.com` / `dispatcher123`
 - Technician: `tech@cosmopolis.com` / `tech123`
+- Agent: `agent@cosmopolis.com` / `agent123`
 
 ## Key Conventions
 
-- **Roles**: admin, owner, dispatcher, technician — enforced via JWT + RBAC
+- **Module path**: `src.*` (not `backend.*`) — the Dockerfile copies `src/` into `/app/src/`
+- **Roles**: admin, owner, dispatcher, technician, agent — `RoleEnum` in models.py
 - **Ticket statuses**: new → assigned → scheduled → done | cancelled
-- **Ticket categories**: plumbing, electrical, heating, appliance, structural, other
-- **Urgency levels**: low, medium, high, emergency
-- **API docs**: Auto-generated at `/docs` (Swagger) and `/redoc`
+- **Conversation states**: new_conversation → gathering → classified_* → ... → closed
+- **AI scenarios**: service, faq, billing, announcement, unknown
+- **Ports**: API on 8000, PostgreSQL on 5433 (host) / 5432 (container)
+
+## AI Agent
+
+- **System prompt**: `rules.txt` — loaded at startup, cached
+- **LLM**: GPT-5.4 via OpenAI API (`OPENAI_TOKEN` env var)
+- **Classifier** (`services/classifier.py`): sends conversation history + instruction → returns reply + classification JSON
+- **Orchestrator** (`services/orchestrator.py`): state machine — manages conversation lifecycle, calls classifier
+- **Test endpoint**: `POST /api/webhook/test` with `{"phone": "...", "message": "..."}`
+
+## Environment Variables
+
+Required in `.env` (project root):
+- `OPENAI_TOKEN` — OpenAI API key for GPT-5.4
+- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` — DB credentials (defaults in docker-compose.yml)
 
 ## Important Notes
 
-- Backend API runs on port 8000, frontend on port 3000
-- Frontend stores JWT token and role in localStorage
-- CORS is currently open (`*`) — restrict for production
-- JWT secret is hardcoded in `backend/auth.py` — move to env var for production
-- SQLite is used for dev; switch to PostgreSQL for production via `backend/database.py`
-- Do not commit `.env` — it contains API secrets
+- Database: PostgreSQL in Docker (dev), tables auto-created on startup
+- `seed_db.py` drops and recreates all tables — only use in dev
+- CORS is open (`*`) — restrict for production
+- JWT secret is hardcoded in `auth.py` — move to env var for production

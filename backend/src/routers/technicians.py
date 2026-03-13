@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List
 from datetime import datetime, timezone
 
@@ -58,22 +59,34 @@ def get_technicians(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_current_user)
 ):
-    techs = db.query(models.User).filter(models.User.role == models.RoleEnum.technician).all()
-    result = []
-    for t in techs:
-        active_count = db.query(models.Ticket).filter(
-            models.Ticket.assigned_to == t.id,
-            models.Ticket.status != models.TicketStatusEnum.done
-        ).count()
-        result.append({
+    # Single query: technicians + active ticket count via LEFT JOIN
+    active_tickets_subq = (
+        db.query(
+            models.Ticket.assigned_to,
+            func.count(models.Ticket.id).label("active_count"),
+        )
+        .filter(models.Ticket.status != models.TicketStatusEnum.done)
+        .group_by(models.Ticket.assigned_to)
+        .subquery()
+    )
+    techs = (
+        db.query(models.User, active_tickets_subq.c.active_count)
+        .outerjoin(active_tickets_subq, models.User.id == active_tickets_subq.c.assigned_to)
+        .filter(models.User.role == models.RoleEnum.technician)
+        .all()
+    )
+    return [
+        {
             "id": t.id,
             "name": t.name,
             "email": t.email or "",
             "phone": t.phone or "",
-            "activeTickets": active_count,
-            "status": "ACTIVE"
-        })
-    return result
+            "specialties": t.specialties or [],
+            "activeTickets": count or 0,
+            "status": "ACTIVE",
+        }
+        for t, count in techs
+    ]
 
 @router.post("", response_model=schemas.TechnicianResponse)
 def create_technician(
@@ -90,7 +103,8 @@ def create_technician(
         email=tech.email,
         phone=tech.phone,
         password_hash=get_password_hash(tech.password),
-        role=models.RoleEnum.technician
+        role=models.RoleEnum.technician,
+        specialties=tech.specialties,
     )
     db.add(new_user)
     db.commit()
@@ -100,6 +114,7 @@ def create_technician(
         "name": new_user.name,
         "email": new_user.email,
         "phone": new_user.phone or "",
+        "specialties": new_user.specialties or [],
         "activeTickets": 0,
         "status": "ACTIVE"
     }
@@ -130,6 +145,8 @@ def update_technician(
         tech.email = tech_update.email
     if tech_update.phone is not None:
         tech.phone = tech_update.phone
+    if tech_update.specialties is not None:
+        tech.specialties = tech_update.specialties
 
     db.commit()
     db.refresh(tech)
@@ -144,9 +161,69 @@ def update_technician(
         "name": tech.name,
         "email": tech.email or "",
         "phone": tech.phone or "",
+        "specialties": tech.specialties or [],
         "activeTickets": active_count,
         "status": "ACTIVE"
     }
+
+@router.get("/{tech_id}/schedule", response_model=List[schemas.TechnicianScheduleResponse])
+def get_technician_schedule(
+    tech_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    tech = db.query(models.User).filter(
+        models.User.id == tech_id,
+        models.User.role == models.RoleEnum.technician,
+    ).first()
+    if not tech:
+        raise HTTPException(status_code=404, detail="Техник не найден")
+
+    schedules = (
+        db.query(models.TechnicianSchedule)
+        .filter(models.TechnicianSchedule.technician_id == tech_id)
+        .order_by(models.TechnicianSchedule.day_of_week)
+        .all()
+    )
+    return schedules
+
+
+@router.put("/{tech_id}/schedule", response_model=List[schemas.TechnicianScheduleResponse])
+def set_technician_schedule(
+    tech_id: str,
+    body: schemas.TechnicianScheduleBulkUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    tech = db.query(models.User).filter(
+        models.User.id == tech_id,
+        models.User.role == models.RoleEnum.technician,
+    ).first()
+    if not tech:
+        raise HTTPException(status_code=404, detail="Техник не найден")
+
+    # Delete existing schedule
+    db.query(models.TechnicianSchedule).filter(
+        models.TechnicianSchedule.technician_id == tech_id,
+    ).delete()
+
+    # Insert new rows
+    new_schedules = []
+    for item in body.schedules:
+        s = models.TechnicianSchedule(
+            technician_id=tech_id,
+            day_of_week=item.day_of_week,
+            start_time=item.start_time,
+            end_time=item.end_time,
+        )
+        db.add(s)
+        new_schedules.append(s)
+
+    db.commit()
+    for s in new_schedules:
+        db.refresh(s)
+    return new_schedules
+
 
 @router.get("/me/tickets", response_model=List[schemas.TicketTechnicianListResponse])
 def get_my_tickets(

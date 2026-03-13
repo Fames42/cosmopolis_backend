@@ -1,5 +1,5 @@
 from src.database import SessionLocal, engine
-from src.models import Base, User, RoleEnum, Building, Tenant, Ticket, TicketStatusEnum, TicketNote
+from src.models import Base, User, RoleEnum, Building, Tenant, Ticket, TicketStatusEnum, TicketNote, TechnicianSchedule
 from src.auth import get_password_hash
 from datetime import datetime, timezone, timedelta
 import uuid
@@ -16,11 +16,22 @@ def seed_database():
         admin = User(name="System Admin", email="admin@cosmopolis.com", password_hash=get_password_hash("admin123"), role=RoleEnum.admin)
         owner = User(name="Test Owner", email="owner@cosmopolis.com", password_hash=get_password_hash("owner123"), role=RoleEnum.owner)
         dispatcher = User(name="Test Dispatcher", email="dispatcher@cosmopolis.com", password_hash=get_password_hash("dispatcher123"), role=RoleEnum.dispatcher)
-        tech1 = User(name="Mike T.", email="tech@cosmopolis.com", phone="+7 (701) 555-12-34", password_hash=get_password_hash("tech123"), role=RoleEnum.technician)
-        tech2 = User(name="Sarah L.", email="sarah@cosmopolis.com", phone="+7 (702) 555-56-78", password_hash=get_password_hash("tech123"), role=RoleEnum.technician)
+        tech1 = User(name="Mike T.", email="tech@cosmopolis.com", phone="+7 (701) 555-12-34", password_hash=get_password_hash("tech123"), role=RoleEnum.technician, specialties=["plumbing", "heating", "appliance"])
+        tech2 = User(name="Sarah L.", email="sarah@cosmopolis.com", phone="+7 (702) 555-56-78", password_hash=get_password_hash("tech123"), role=RoleEnum.technician, specialties=["electrical", "structural", "appliance"])
         agent = User(name="Test Agent", email="agent@cosmopolis.com", password_hash=get_password_hash("agent123"), role=RoleEnum.agent)
 
         db.add_all([admin, owner, dispatcher, tech1, tech2, agent])
+        db.commit()
+
+        print("Seeding Technician Schedules...")
+        # Mike: Mon-Fri 09:00-18:00
+        for day in range(5):
+            db.add(TechnicianSchedule(technician_id=tech1.id, day_of_week=day, start_time="09:00", end_time="18:00"))
+        # Sarah: Mon/Wed/Fri 10:00-19:00, Tue/Thu 08:00-16:00
+        for day in [0, 2, 4]:
+            db.add(TechnicianSchedule(technician_id=tech2.id, day_of_week=day, start_time="10:00", end_time="19:00"))
+        for day in [1, 3]:
+            db.add(TechnicianSchedule(technician_id=tech2.id, day_of_week=day, start_time="08:00", end_time="16:00"))
         db.commit()
 
         print("Seeding Buildings and Tenants...")

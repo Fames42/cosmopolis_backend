@@ -11,7 +11,11 @@ from . import models, schemas
 from .database import get_db
 
 # Security Configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "super_secret_key_change_in_production")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    import warnings
+    warnings.warn("SECRET_KEY not set — using insecure default. Set SECRET_KEY env var for production.", stacklevel=1)
+    SECRET_KEY = "super_secret_key_change_in_production"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days
 

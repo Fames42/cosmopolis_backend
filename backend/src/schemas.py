@@ -3,7 +3,7 @@ from typing import Optional, List, Any
 from datetime import datetime
 from uuid import UUID
 
-from .models import RoleEnum, MessageSenderEnum, MessageTypeEnum, TicketStatusEnum, ConversationStatusEnum
+from .models import RoleEnum, MessageSenderEnum, MessageTypeEnum, TicketStatusEnum, ConversationStatusEnum, ConversationStateEnum, ScenarioEnum
 
 # --- User Schemas ---
 class UserBase(BaseModel):
@@ -21,11 +21,27 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
+class TechnicianScheduleItem(BaseModel):
+    day_of_week: int  # 0=Monday .. 6=Sunday
+    start_time: str   # "09:00"
+    end_time: str     # "18:00"
+
+class TechnicianScheduleResponse(TechnicianScheduleItem):
+    id: int
+    technician_id: str
+
+    class Config:
+        from_attributes = True
+
+class TechnicianScheduleBulkUpdate(BaseModel):
+    schedules: List[TechnicianScheduleItem]
+
 class TechnicianResponse(BaseModel):
     id: str
     name: str
     email: str = ""
     phone: str = ""
+    specialties: List[str] = []
     activeTickets: int = 0
     status: str = "ACTIVE"
 
@@ -37,11 +53,13 @@ class TechnicianCreate(BaseModel):
     email: EmailStr
     phone: str = ""
     password: str
+    specialties: List[str] = []
 
 class TechnicianUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    specialties: Optional[List[str]] = None
 
 # --- Building Schemas ---
 class BuildingBase(BaseModel):
@@ -102,6 +120,9 @@ class ConversationCreate(ConversationBase):
 class ConversationResponse(ConversationBase):
     id: int
     tenant_id: int
+    state: Optional[str] = None
+    scenario: Optional[str] = None
+    classifier_confidence: Optional[float] = None
     created_at: datetime
     messages: List[MessageResponse] = []
 
@@ -228,3 +249,21 @@ class TicketTechnicianDetailResponse(BaseModel):
 
 class TicketUpdateStatus(BaseModel):
     status: str
+
+# --- Webhook / Agent Schemas ---
+class AgentResponse(BaseModel):
+    reply: str
+    classified: bool = False
+    scenario: Optional[str] = None
+    confidence: Optional[float] = None
+    subtype: Optional[str] = None
+    requires_human: bool = False
+
+class TestMessageRequest(BaseModel):
+    phone: str
+    message: str
+
+class TestMessageResponse(BaseModel):
+    reply: str
+    state: str
+    agent_response: Optional[AgentResponse] = None
