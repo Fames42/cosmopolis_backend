@@ -13,7 +13,10 @@ from ..models import (
 )
 from ..schemas import AgentResponse, RouterResponse, CollectedFields, BackendNotes
 from .classifier import step1_route, step2_write
-from .notifier import send_escalation_alert
+from .notifier import (
+    send_escalation_alert, generate_escalation_message, notify_dispatchers,
+    generate_technician_assignment_message, notify_technician,
+)
 from .scheduler import find_available_slots, find_slots_for_date, create_ticket_from_context, verify_slot_available
 
 logger = logging.getLogger("uvicorn.error")
@@ -145,26 +148,46 @@ def _save_message(
     return msg
 
 
+ESCALATION_COOLDOWN_HOURS = 12
+
+
 def _escalate(
+    db: Session,
     conv: Conversation,
     tenant: Tenant,
     phone: str,
     content: str,
     scenario: ScenarioEnum,
     confidence: float | None,
+    history: list[dict[str, str]],
 ) -> None:
-    """Transition conversation to escalated_to_human and send alert."""
+    """Transition conversation to escalated_to_human, notify group + dispatchers."""
     conv.state = ConversationStateEnum.escalated_to_human
     conv.scenario = scenario
     conv.classifier_confidence = confidence
+    conv.escalated_at = datetime.now(timezone.utc)
 
+    building_name = tenant.building.name if tenant.building else "—"
+    apartment = tenant.apartment or "—"
+
+    # Group chat alert (existing)
     send_escalation_alert(
         tenant_name=tenant.name,
         tenant_phone=phone,
-        building_name=tenant.building.name if tenant.building else "—",
-        apartment=tenant.apartment or "—",
+        building_name=building_name,
+        apartment=apartment,
         last_message=content,
     )
+
+    # Personal dispatcher notifications via GPT-generated message
+    message = generate_escalation_message(
+        tenant_name=tenant.name,
+        tenant_phone=phone,
+        building_name=building_name,
+        apartment=apartment,
+        history=history,
+    )
+    notify_dispatchers(db, message)
 
 
 def _update_context(conv: Conversation, updates: dict) -> dict:
@@ -270,6 +293,26 @@ def process_conversation(
     Returns:
         Tuple of (reply_text, conversation_state, agent_response_or_none).
     """
+    # ── Check escalation state ──────────────────────────────────────────
+    if conv.state == ConversationStateEnum.escalated_to_human:
+        if conv.escalated_at:
+            escalated_at = conv.escalated_at.replace(tzinfo=timezone.utc) if conv.escalated_at.tzinfo is None else conv.escalated_at
+            elapsed = datetime.now(timezone.utc) - escalated_at
+            if elapsed < timedelta(hours=ESCALATION_COOLDOWN_HOURS):
+                # Still escalated — save message but don't respond
+                logger.info("Conversation %s is escalated, AI paused (%.1fh remaining)",
+                            conv.id, ESCALATION_COOLDOWN_HOURS - elapsed.total_seconds() / 3600)
+                return "", conv.state.value, None
+
+        # Cooldown expired — auto-reset conversation
+        logger.info("Escalation cooldown expired for conversation %s, resetting", conv.id)
+        conv.state = ConversationStateEnum.new_conversation
+        conv.escalated_at = None
+        conv.context_data = {}
+        conv.scenario = None
+        conv.reopened_at = datetime.now(timezone.utc)
+        db.commit()
+
     history = _get_message_history(db, conv.id, since=conv.reopened_at)
 
     # Extract last tenant message
@@ -314,7 +357,7 @@ def process_conversation(
     # Handle escalation
     if router.requires_human:
         scenario = INTENT_SCENARIO_MAP.get(router.intent or "unknown", ScenarioEnum.unknown)
-        _escalate(conv, tenant, phone, last_tenant_content, scenario, None)
+        _escalate(db, conv, tenant, phone, last_tenant_content, scenario, None, history)
         reply = step2_write(router_raw, last_tenant_content, {"action": "escalated"})
         db.commit()
         _save_message(db, conv.id, MessageSenderEnum.ai, reply)
@@ -388,7 +431,7 @@ def process_conversation(
         elif "action" not in backend_results:
             if urgency == "emergency":
                 scenario = INTENT_SCENARIO_MAP.get(router.intent or "unknown", ScenarioEnum.unknown)
-                _escalate(conv, tenant, phone, last_tenant_content, scenario, None)
+                _escalate(db, conv, tenant, phone, last_tenant_content, scenario, None, history)
                 backend_results["action"] = "no_slots_emergency_escalated"
             else:
                 backend_results["action"] = "no_slots_available"
@@ -451,6 +494,26 @@ def process_conversation(
         backend_results["ticket_created"] = {
             "ticket_number": ticket.ticket_number,
         }
+
+        # Notify the assigned technician via WhatsApp
+        if ticket.assigned_to:
+            building_name = tenant.building.name if tenant.building else "—"
+            apartment = tenant.apartment or "—"
+            offered = ctx.get("offered_slots", [])
+            selected_idx = ctx.get("selected_slot_index", 0)
+            slot = offered[selected_idx] if selected_idx < len(offered) else {}
+            tech_msg = generate_technician_assignment_message(
+                technician_name=slot.get("technician_name", "—"),
+                ticket_number=ticket.ticket_number,
+                tenant_name=tenant.name,
+                building_name=building_name,
+                apartment=apartment,
+                description=ticket.description or "",
+                category=ticket.category or "",
+                urgency=ticket.urgency or "",
+                scheduled_time=slot.get("start", ""),
+            )
+            notify_technician(db, ticket.assigned_to, tech_msg)
 
     # Handle already-created ticket (tenant messages after ticket_created)
     ctx = conv.context_data or {}

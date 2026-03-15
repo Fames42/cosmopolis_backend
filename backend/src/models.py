@@ -122,6 +122,7 @@ class Conversation(Base):
     context_data = Column(JSON, nullable=True, default=dict)
     created_at = Column(DateTime, default=_utcnow)
     reopened_at = Column(DateTime, nullable=True)
+    escalated_at = Column(DateTime, nullable=True)
 
     tenant = relationship("Tenant", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation")

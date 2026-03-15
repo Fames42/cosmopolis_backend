@@ -75,6 +75,7 @@ STATE RULES
 
 SLOT SELECTION
 - If the conversation state includes OFFERED_SLOTS and the tenant's message indicates a choice (e.g. "1", "first", "первый", "второй"), set collected_fields.time_slot to the 0-based index of the selected slot.
+- If only ONE slot was offered and the tenant agrees ("да", "yes", "подходит", "ок", "давайте"), that counts as selecting it — set collected_fields.time_slot = 0.
 - If the tenant wants different options, set next_step to "offer_slots" to trigger a new search.
 
 CONFIRMATION

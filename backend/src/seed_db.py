@@ -15,10 +15,10 @@ def seed_database():
         print("Seeding Users...")
         admin = User(name="System Admin", email="admin@cosmopolis.com", password_hash=get_password_hash("admin123"), role=RoleEnum.admin)
         owner = User(name="Zhanna", email="zhanna@cosmorent.kz", password_hash=get_password_hash("zhanna123"), role=RoleEnum.owner)
-        dispatcher = User(name="Менеджер", email="manager@cosmorent.kz", password_hash=get_password_hash("manager123"), role=RoleEnum.dispatcher)
+        dispatcher = User(name="Менеджер", email="manager@cosmorent.kz", phone="87762113673", password_hash=get_password_hash("manager123"), role=RoleEnum.dispatcher)
         dispatcher_max = User(name="Макс", email="maksim@cosmorent.kz", password_hash=get_password_hash("maksim123"), role=RoleEnum.admin)
-        tech1 = User(name="Mike T.", email="tech@cosmopolis.com", phone="+7 (701) 555-12-34", password_hash=get_password_hash("tech123"), role=RoleEnum.technician, specialties=["plumbing", "heating", "appliance"])
-        tech2 = User(name="Sarah L.", email="sarah@cosmopolis.com", phone="+7 (702) 555-56-78", password_hash=get_password_hash("tech123"), role=RoleEnum.technician, specialties=["electrical", "structural", "appliance"])
+        tech1 = User(name="Maxim T.", email="tech@cosmopolis.com", phone="+7 (701) 487-71-50", password_hash=get_password_hash("tech123"), role=RoleEnum.technician, specialties=["electrical", "plumbing", "heating", "structural", "appliance"])
+        tech2 = User(name="Sarah L.", email="sarah@cosmopolis.com", phone="+7 (702) 555-56-78", password_hash=get_password_hash("tech123"), role=RoleEnum.technician, specialties=["electrical", "plumbing", "heating", "structural", "appliance"])
         agent = User(name="Агент", email="agent@cosmopolis.com", password_hash=get_password_hash("agent123"), role=RoleEnum.agent)
 
         db.add_all([admin, owner, dispatcher, dispatcher_max, tech1, tech2, agent])
