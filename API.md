@@ -624,7 +624,24 @@ List all tenants with building info.
 
 **Response:**
 ```json
-[{ "id": 1, "name": "Aisha", "phone": "+77761234567", "apartment": "12", "building_id": 1, "building_name": "Building A" }]
+[{
+  "id": 1,
+  "name": "Aisha",
+  "phone": "+77761234567",
+  "apartment": "12",
+  "building_id": 1,
+  "building_name": "Building A",
+  "email": "aisha@example.com",
+  "move_in_date": "2025-09-01",
+  "lease_duration": "12 months",
+  "adults": 2,
+  "children": 1,
+  "has_pets": false,
+  "parking": true,
+  "parking_slot": "A-12",
+  "emergency_contact": "+77001234567",
+  "notes": "Предпочитает визиты после 14:00"
+}]
 ```
 
 ---
@@ -635,7 +652,46 @@ Create a new tenant.
 
 **Request body:**
 ```json
-{ "name": "New Tenant", "phone": "+77769999999", "apartment": "5A", "building_id": 1 }
+{
+  "name": "New Tenant",
+  "phone": "+77769999999",
+  "apartment": "5A",
+  "building_id": 1,
+  "email": "tenant@example.com",
+  "move_in_date": "2026-01-15",
+  "lease_duration": "12 months",
+  "adults": 1,
+  "children": 0,
+  "has_pets": false,
+  "parking": true,
+  "parking_slot": "B-3",
+  "emergency_contact": "+77009876543",
+  "notes": null
+}
+```
+
+All fields except `name`, `phone`, `apartment`, `building_id` are optional.
+
+**Response:** `TenantListItem`
+
+---
+
+### `PUT /api/agents/tenants/{tenant_id}`
+
+Update a tenant's information. All fields are optional.
+
+**Request body:**
+```json
+{
+  "email": "new@example.com",
+  "adults": 2,
+  "children": 1,
+  "has_pets": true,
+  "parking": false,
+  "parking_slot": null,
+  "emergency_contact": "+77001112233",
+  "notes": "Свободный текст с пожеланиями"
+}
 ```
 
 **Response:** `TenantListItem`
@@ -652,6 +708,23 @@ Assign a tenant to a building.
 ```
 
 **Response:** `TenantListItem`
+
+---
+
+### Tenant Optional Fields Reference
+
+| Field               | Type    | Description                                    |
+|---------------------|---------|------------------------------------------------|
+| `email`             | string  | Tenant email                                   |
+| `move_in_date`      | string  | Дата заселения (`YYYY-MM-DD`)                  |
+| `lease_duration`    | string  | Срок аренды (e.g. `"12 months"`)               |
+| `adults`            | int     | Количество взрослых                            |
+| `children`          | int     | Количество детей                               |
+| `has_pets`          | bool    | Питомцы (да/нет)                               |
+| `parking`           | bool    | Парковка (да/нет)                              |
+| `parking_slot`      | string  | Номер парковочного места                       |
+| `emergency_contact` | string  | Контакт для экстренных случаев                 |
+| `notes`             | string  | Дополнительно (свободный текст)                |
 
 ---
 

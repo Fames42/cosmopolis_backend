@@ -81,14 +81,39 @@ class TenantBase(BaseModel):
     name: str
     phone: str
     apartment: str
+    email: Optional[str] = None
+    move_in_date: Optional[str] = None
+    lease_duration: Optional[str] = None
+    adults: Optional[int] = None
+    children: Optional[int] = None
+    has_pets: Optional[bool] = None
+    parking: Optional[bool] = None
+    parking_slot: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
 
 class TenantCreate(TenantBase):
     building_id: int
 
+class TenantUpdate(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    apartment: Optional[str] = None
+    email: Optional[str] = None
+    move_in_date: Optional[str] = None
+    lease_duration: Optional[str] = None
+    adults: Optional[int] = None
+    children: Optional[int] = None
+    has_pets: Optional[bool] = None
+    parking: Optional[bool] = None
+    parking_slot: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
+
 class TenantResponse(TenantBase):
     id: int
     building_id: int
-    
+
     class Config:
         from_attributes = True
 

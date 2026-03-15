@@ -101,8 +101,18 @@ class Tenant(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     phone = Column(String, unique=True, index=True)
+    email = Column(String, nullable=True)
     building_id = Column(Integer, ForeignKey("buildings.id"), index=True)
     apartment = Column(String)
+    move_in_date = Column(String, nullable=True)          # дата заселения
+    lease_duration = Column(String, nullable=True)        # срок аренды
+    adults = Column(Integer, nullable=True)               # количество взрослых
+    children = Column(Integer, nullable=True)             # количество детей
+    has_pets = Column(Boolean, nullable=True)             # питомцы да/нет
+    parking = Column(Boolean, nullable=True)              # parking yes/no
+    parking_slot = Column(String, nullable=True)          # номер парковочного места
+    emergency_contact = Column(String, nullable=True)     # контакт для экстренных случаев
+    notes = Column(Text, nullable=True)                   # дополнительно (свободный текст)
 
     building = relationship("Building", back_populates="tenants")
     conversations = relationship("Conversation", back_populates="tenant")

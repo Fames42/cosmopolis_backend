@@ -43,9 +43,25 @@ def seed_database():
         db.add_all([b1, b2, b3])
         db.commit()
 
-        t1 = Tenant(name="Alisher Iglymov", phone="87762113673", apartment="4B", building_id=b1.id)
-        t2 = Tenant(name="Maksim Kopochkin", phone="87014877150", apartment="4B", building_id=b1.id)
-        t3 = Tenant(name="Zhanna S.", phone="87057777677", apartment="4B", building_id=b1.id)
+        t1 = Tenant(
+            name="Alisher Iglymov", phone="87762113673", email="alisher.iglimov.e@gmail.com",
+            apartment="4B", building_id=b1.id,
+            move_in_date="2025-09-01", lease_duration="12 months",
+            adults=1, children=0, has_pets=False,
+            parking=True, parking_slot="A-12",
+            emergency_contact="87001234567",
+        )
+        t2 = Tenant(
+            name="Maksim Kopochkin", phone="87014877150",
+            apartment="4B", building_id=b1.id,
+            move_in_date="2025-06-15", lease_duration="6 months",
+            adults=2, children=1, has_pets=True,
+            parking=False,
+        )
+        t3 = Tenant(
+            name="Zhanna S.", phone="87057777677",
+            apartment="4B", building_id=b1.id,
+        )
         db.add_all([t1, t2, t3])
         db.commit()
 

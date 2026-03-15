@@ -28,6 +28,31 @@ class TenantCreateRequest(BaseModel):
     phone: str
     apartment: str
     building_id: Optional[int] = None
+    email: Optional[str] = None
+    move_in_date: Optional[str] = None
+    lease_duration: Optional[str] = None
+    adults: Optional[int] = None
+    children: Optional[int] = None
+    has_pets: Optional[bool] = None
+    parking: Optional[bool] = None
+    parking_slot: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
+
+class TenantUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    phone: Optional[str] = None
+    apartment: Optional[str] = None
+    email: Optional[str] = None
+    move_in_date: Optional[str] = None
+    lease_duration: Optional[str] = None
+    adults: Optional[int] = None
+    children: Optional[int] = None
+    has_pets: Optional[bool] = None
+    parking: Optional[bool] = None
+    parking_slot: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
 
 class TenantListItem(BaseModel):
     id: int
@@ -36,6 +61,16 @@ class TenantListItem(BaseModel):
     apartment: str
     building_id: Optional[int] = None
     building_name: Optional[str] = None
+    email: Optional[str] = None
+    move_in_date: Optional[str] = None
+    lease_duration: Optional[str] = None
+    adults: Optional[int] = None
+    children: Optional[int] = None
+    has_pets: Optional[bool] = None
+    parking: Optional[bool] = None
+    parking_slot: Optional[str] = None
+    emergency_contact: Optional[str] = None
+    notes: Optional[str] = None
 
 class TenantAssignRequest(BaseModel):
     building_id: int
@@ -91,6 +126,27 @@ def create_building(
     )
 
 
+def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> TenantListItem:
+    return TenantListItem(
+        id=tenant.id,
+        name=tenant.name,
+        phone=tenant.phone,
+        apartment=tenant.apartment,
+        building_id=tenant.building_id,
+        building_name=building_name,
+        email=tenant.email,
+        move_in_date=tenant.move_in_date,
+        lease_duration=tenant.lease_duration,
+        adults=tenant.adults,
+        children=tenant.children,
+        has_pets=tenant.has_pets,
+        parking=tenant.parking,
+        parking_slot=tenant.parking_slot,
+        emergency_contact=tenant.emergency_contact,
+        notes=tenant.notes,
+    )
+
+
 # --- Tenants ---
 
 @router.get("/tenants", response_model=list[TenantListItem])
@@ -108,14 +164,7 @@ def list_tenants(
         .all()
     )
     return [
-        TenantListItem(
-            id=tenant.id,
-            name=tenant.name,
-            phone=tenant.phone,
-            apartment=tenant.apartment,
-            building_id=tenant.building_id,
-            building_name=bname,
-        )
+        _tenant_to_item(tenant, bname)
         for tenant, bname in rows
     ]
 
@@ -140,6 +189,16 @@ def create_tenant(
         phone=body.phone,
         apartment=body.apartment,
         building_id=body.building_id,
+        email=body.email,
+        move_in_date=body.move_in_date,
+        lease_duration=body.lease_duration,
+        adults=body.adults,
+        children=body.children,
+        has_pets=body.has_pets,
+        parking=body.parking,
+        parking_slot=body.parking_slot,
+        emergency_contact=body.emergency_contact,
+        notes=body.notes,
     )
     db.add(tenant)
     db.commit()
@@ -149,14 +208,31 @@ def create_tenant(
     if tenant.building_id:
         building_name = db.query(models.Building.name).filter(models.Building.id == tenant.building_id).scalar()
 
-    return TenantListItem(
-        id=tenant.id,
-        name=tenant.name,
-        phone=tenant.phone,
-        apartment=tenant.apartment,
-        building_id=tenant.building_id,
-        building_name=building_name,
-    )
+    return _tenant_to_item(tenant, building_name)
+
+
+@router.put("/tenants/{tenant_id}", response_model=TenantListItem)
+def update_tenant(
+    tenant_id: int,
+    body: TenantUpdateRequest,
+    current_user: models.User = Depends(get_agent_user),
+    db: Session = Depends(get_db),
+):
+    tenant = db.query(models.Tenant).filter(models.Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(tenant, field, value)
+
+    db.commit()
+    db.refresh(tenant)
+
+    building_name = None
+    if tenant.building_id:
+        building_name = db.query(models.Building.name).filter(models.Building.id == tenant.building_id).scalar()
+
+    return _tenant_to_item(tenant, building_name)
 
 
 @router.put("/tenants/{tenant_id}/assign", response_model=TenantListItem)
@@ -178,11 +254,4 @@ def assign_tenant(
     db.commit()
     db.refresh(tenant)
 
-    return TenantListItem(
-        id=tenant.id,
-        name=tenant.name,
-        phone=tenant.phone,
-        apartment=tenant.apartment,
-        building_id=tenant.building_id,
-        building_name=building.name,
-    )
+    return _tenant_to_item(tenant, building.name)
