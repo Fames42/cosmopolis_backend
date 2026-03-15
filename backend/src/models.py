@@ -121,6 +121,7 @@ class Conversation(Base):
     classifier_confidence = Column(Float, nullable=True)
     context_data = Column(JSON, nullable=True, default=dict)
     created_at = Column(DateTime, default=_utcnow)
+    reopened_at = Column(DateTime, nullable=True)
 
     tenant = relationship("Tenant", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation")
@@ -149,7 +150,7 @@ class Ticket(Base):
     category = Column(String)
     urgency = Column(String)
     description = Column(Text)
-    photo_url = Column(Text, nullable=True)
+    photo_urls = Column(JSON, nullable=True, default=list)
     availability_time = Column(String)
     assigned_to = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     status = Column(Enum(TicketStatusEnum), default=TicketStatusEnum.new)

@@ -7,6 +7,7 @@ Run against a live Docker backend:
     3. python backend/tests/test_api.py
 """
 
+import base64
 import sys
 import requests
 
@@ -640,7 +641,110 @@ def test_service_flow():
         test("Auto-ticket has assigned tech", False, "skipped")
 
 
-# ── 12. Edge Cases ───────────────────────────────────────────────────────────
+# ── 12. Image Upload via Green API Webhook ──────────────────────────────────
+def test_image_upload():
+    section("12. Image Upload & Ticket Photo")
+
+    # Create a small test PNG (1x1 red pixel)
+    # PNG header + IHDR + IDAT + IEND for a 1x1 red pixel
+    tiny_png = (
+        b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01'
+        b'\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00'
+        b'\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00'
+        b'\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82'
+    )
+    fake_b64 = base64.b64encode(tiny_png).decode("utf-8")
+    fake_data_uri = f"data:image/png;base64,{fake_b64}"
+
+    # Use a known tenant phone (Alisher: 87762113673, normalized: 77762113673)
+    tenant_phone = "87762113673"
+
+    # ── Test 1: Green API webhook with imageMessage ──
+    # Simulate the Green API webhook payload for an image message.
+    # Since we can't serve a real downloadUrl, we test the endpoint directly
+    # by sending a text + verifying the image storage via the orchestrator.
+
+    # First, test that imageMessage without downloadUrl is handled (no crash)
+    r = requests.post(f"{BASE}/webhook/greenapi", json={
+        "typeWebhook": "incomingMessageReceived",
+        "senderData": {"chatId": f"{tenant_phone.replace('8', '7', 1)}@c.us"},
+        "messageData": {
+            "typeMessage": "imageMessage",
+            "fileMessageData": {
+                "caption": "Вот фото проблемы",
+                "downloadUrl": "",
+            },
+        },
+    })
+    test("imageMessage without downloadUrl → 200", r.status_code == 200)
+
+    # ── Test 2: Ticket creation with photo_url via API ──
+    # Create a ticket with photo_url set directly
+    tenants_r = get("/agents/tenants", "agent")
+    if tenants_r.status_code == 200 and tenants_r.json():
+        tenant_id = tenants_r.json()[0]["id"]
+        r = post("/tickets", "dispatcher", json={
+            "tenant_id": tenant_id,
+            "category": "Plumbing",
+            "urgency": "MEDIUM",
+            "description": "Leaking pipe — photo attached",
+            "photo_urls": [fake_data_uri],
+            "availability_time": "anytime",
+        })
+        test("POST /tickets with photo_url → 200", r.status_code == 200)
+
+        if r.status_code == 200:
+            ticket_id = r.json()["id"]
+
+            # Fetch detail and verify photo_url is in issueDetails
+            r2 = get(f"/tickets/{ticket_id}", "dispatcher")
+            test("GET ticket detail → 200", r2.status_code == 200)
+            if r2.status_code == 200:
+                detail = r2.json()
+                issue = detail.get("issueDetails", {})
+                test("issueDetails has photo_urls field", "photo_urls" in issue)
+                test("photo_urls is a list", isinstance(issue.get("photo_urls"), list))
+                test("photo_urls contains uploaded data", fake_data_uri in (issue.get("photo_urls") or []))
+
+    # ── Test 3: Ticket without photo has null photo_url ──
+    if tenants_r.status_code == 200 and tenants_r.json():
+        tenant_id = tenants_r.json()[0]["id"]
+        r = post("/tickets", "dispatcher", json={
+            "tenant_id": tenant_id,
+            "category": "Electrical",
+            "urgency": "LOW",
+            "description": "Light switch broken, no photo",
+            "availability_time": "morning",
+        })
+        test("POST /tickets without photo → 200", r.status_code == 200)
+        if r.status_code == 200:
+            ticket_id = r.json()["id"]
+            r2 = get(f"/tickets/{ticket_id}", "dispatcher")
+            if r2.status_code == 200:
+                issue = r2.json().get("issueDetails", {})
+                test("No-photo ticket has photo_urls=null", issue.get("photo_urls") is None)
+
+    # ── Test 4: Message with image stored in conversation ──
+    # Verify that messages in a conversation include media_url
+    r = get("/conversations", "dispatcher")
+    if r.status_code == 200:
+        convos = r.json()
+        # Find conversation for our test tenant
+        tenant_convos = [c for c in convos if "77762113673" in c.get("whatsapp_chat_id", "")]
+        if tenant_convos:
+            cid = tenant_convos[0]["id"]
+            r2 = get(f"/conversations/{cid}", "dispatcher")
+            test("GET conversation detail → 200", r2.status_code == 200)
+            if r2.status_code == 200:
+                messages = r2.json().get("messages", [])
+                test("Conversation has messages", len(messages) > 0)
+                # Check that message schema includes media_url field
+                if messages:
+                    test("Messages have media_url field", "media_url" in messages[0])
+                    test("Messages have message_type field", "message_type" in messages[0])
+
+
+# ── 13. Edge Cases ───────────────────────────────────────────────────────────
 def test_edge_cases():
     section("10. Edge Cases")
 
@@ -684,6 +788,7 @@ if __name__ == "__main__":
     test_webhook_flow()
     test_technician_schedules()
     test_service_flow()
+    test_image_upload()
     test_edge_cases()
 
     print(f"\n{'='*60}")

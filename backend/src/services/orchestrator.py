@@ -1,8 +1,9 @@
-"""Conversation state machine — routes incoming WhatsApp messages through states."""
+"""Conversation orchestrator — two-step pipeline: Route → Action → Write."""
 
 import json
 import re
 import logging
+from datetime import datetime, timezone, date as date_type, timedelta
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -10,116 +11,39 @@ from ..models import (
     ConversationStatusEnum, ConversationStateEnum, ScenarioEnum,
     MessageSenderEnum, MessageTypeEnum,
 )
-from ..schemas import AgentResponse
-from .classifier import process_message, call_llm
+from ..schemas import AgentResponse, RouterResponse, CollectedFields, BackendNotes
+from .classifier import step1_route, step2_write
 from .notifier import send_escalation_alert
-from .scheduler import find_available_slots, create_ticket_from_context, verify_slot_available
+from .scheduler import find_available_slots, find_slots_for_date, create_ticket_from_context, verify_slot_available
 
 logger = logging.getLogger("uvicorn.error")
 
-CONFIDENCE_THRESHOLD = 0.65
 
-SCENARIO_STATE_MAP = {
-    "service": ConversationStateEnum.classified_service,
-    "faq": ConversationStateEnum.classified_faq,
-    "billing": ConversationStateEnum.classified_billing,
-    "announcement": ConversationStateEnum.classified_announcement,
+# ── next_step → DB state mapping ─────────────────────────────────────────────
+
+NEXT_STEP_STATE_MAP = {
+    "greet": ConversationStateEnum.gathering,
+    "clarify_intent": ConversationStateEnum.gathering,
+    "ask_problem_details": ConversationStateEnum.service_collecting_details,
+    "ask_danger": ConversationStateEnum.service_assessing_urgency,
+    "ask_preferred_day": ConversationStateEnum.service_collecting_details,
+    "offer_slots": ConversationStateEnum.service_scheduling,
+    "confirm": ConversationStateEnum.service_ready_for_ticket,
+    "answer_faq": ConversationStateEnum.classified_faq,
+    "answer_billing": ConversationStateEnum.classified_billing,
+    "log_announcement": ConversationStateEnum.classified_announcement,
+    "close_or_continue": ConversationStateEnum.gathering,
+    "escalate": ConversationStateEnum.escalated_to_human,
+    "cancel": ConversationStateEnum.closed,
 }
 
-
-# ── LLM instruction prompts for each service-flow state ──────────────────────
-
-SERVICE_DETAILS_INSTRUCTION = """You are collecting details about a maintenance/service request.
-
-Based on the conversation so far, extract what you know AND reply to the tenant.
-
-Return ONLY valid JSON:
-{
-  "reply": "your reply to the tenant (in their language)",
-  "category": "plumbing" | "electrical" | "heating" | "appliance" | "structural" | "ventilation" | "sewage" | "internet" | "other" | null,
-  "urgency": "emergency" | "high" | "medium" | "low" | null,
-  "description": "concise summary of the problem" or null,
-  "location": "where in the apartment" or null,
-  "details_complete": true or false,
-  "cancel_requested": false
+INTENT_SCENARIO_MAP = {
+    "service": ScenarioEnum.service,
+    "faq": ScenarioEnum.faq,
+    "billing": ScenarioEnum.billing,
+    "announcement": ScenarioEnum.announcement,
+    "unknown": ScenarioEnum.unknown,
 }
-
-Rules:
-- If category, urgency, and description are all clear → set details_complete=true
-- If something is missing, ask for it in your reply (1 question at a time)
-- Match the tenant's language
-- If tenant says "cancel", "never mind", "отмена" → set cancel_requested=true
-- Be concise: 1-2 sentences"""
-
-URGENCY_CONFIRM_INSTRUCTION = """The tenant reported an emergency/high-urgency issue.
-
-Confirm the urgency level with the tenant. Ask if the situation is actively dangerous right now.
-
-Return ONLY valid JSON:
-{
-  "reply": "your reply to the tenant (in their language)",
-  "urgency_confirmed": true or false,
-  "revised_urgency": "emergency" | "high" | "medium" | "low" | null,
-  "cancel_requested": false
-}
-
-Rules:
-- If tenant confirms danger → urgency_confirmed=true
-- If tenant says it's not urgent right now → revised_urgency with lower level
-- Match the tenant's language
-- If tenant says "cancel" → cancel_requested=true"""
-
-SLOT_PRESENT_INSTRUCTION = """Present the available time slots to the tenant as numbered options.
-
-Return ONLY valid JSON:
-{
-  "reply": "your reply presenting the numbered options (in their language)",
-  "cancel_requested": false
-}
-
-Rules:
-- Present each slot as a numbered option (1, 2, 3...)
-- Include the date, time, and technician name
-- Ask which option works best
-- Match the tenant's language
-- Be friendly and concise
-- If tenant says "cancel" → cancel_requested=true"""
-
-SLOT_SELECT_INSTRUCTION = """The tenant is choosing from the time slots that were offered.
-
-Based on the tenant's reply, determine which slot they selected.
-
-Return ONLY valid JSON:
-{
-  "reply": "your reply acknowledging their choice (in their language)",
-  "selected_index": 0-based index of the selected slot or null,
-  "needs_more_options": true or false,
-  "cancel_requested": false
-}
-
-Rules:
-- If tenant clearly picks a number (e.g., "1", "first", "первый") → set selected_index (0-based)
-- If tenant says "other options" or "none of these" → needs_more_options=true
-- If unclear, ask them to clarify in the reply
-- Match the tenant's language
-- If tenant says "cancel" → cancel_requested=true"""
-
-CONFIRM_INSTRUCTION = """Summarize ALL collected details and ask the tenant for final confirmation before creating a ticket.
-
-Return ONLY valid JSON:
-{
-  "reply": "your summary and confirmation request (in their language)",
-  "confirmed": true or false,
-  "cancel_requested": false
-}
-
-Rules:
-- If this is the first time showing the summary (the tenant hasn't responded yet), set confirmed=false and present the summary asking them to confirm
-- If the tenant already confirmed (said "yes", "да", "correct", etc.), set confirmed=true
-- If tenant says "no" or wants changes, set confirmed=false and ask what to change
-- Include: problem description, category, urgency, scheduled time, technician name
-- Match the tenant's language
-- If tenant says "cancel" → cancel_requested=true"""
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -128,14 +52,21 @@ def _digits_only(phone: str) -> str:
     return re.sub(r"\D", "", phone)
 
 
+def _normalize_kz(digits: str) -> str:
+    """Normalize KZ phone: replace leading 8 with 7 (87xx → 77xx)."""
+    if len(digits) == 11 and digits.startswith("8"):
+        return "7" + digits[1:]
+    return digits
+
+
 def _find_tenant(db: Session, phone: str) -> Tenant | None:
-    digits = _digits_only(phone)
+    digits = _normalize_kz(_digits_only(phone))
     if not digits:
         return None
     suffix = digits[-3:]
     candidates = db.query(Tenant).filter(Tenant.phone.contains(suffix)).all()
     for t in candidates:
-        if _digits_only(t.phone) == digits:
+        if _normalize_kz(_digits_only(t.phone)) == digits:
             return t
     return None
 
@@ -153,6 +84,7 @@ def _get_or_create_conversation(db: Session, tenant: Tenant, chat_id: str) -> Co
             conv.scenario = None
             conv.classifier_confidence = None
             conv.context_data = {}
+            conv.reopened_at = datetime.now(timezone.utc)
             db.commit()
             db.refresh(conv)
         return conv
@@ -169,11 +101,15 @@ def _get_or_create_conversation(db: Session, tenant: Tenant, chat_id: str) -> Co
     return conv
 
 
-def _get_message_history(db: Session, conversation_id: int) -> list[dict[str, str]]:
-    messages = (
+def _get_message_history(db: Session, conversation_id: int, since: datetime | None = None) -> list[dict[str, str]]:
+    query = (
         db.query(Message)
         .filter(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.asc())
+    )
+    if since:
+        query = query.filter(Message.created_at >= since)
+    messages = (
+        query.order_by(Message.created_at.asc())
         .limit(20)
         .all()
     )
@@ -185,12 +121,23 @@ def _get_message_history(db: Session, conversation_id: int) -> list[dict[str, st
     return history
 
 
-def _save_message(db: Session, conversation_id: int, sender: MessageSenderEnum, content: str) -> Message:
+def _save_message(
+    db: Session,
+    conversation_id: int,
+    sender: MessageSenderEnum,
+    content: str,
+    image_base64: str | None = None,
+) -> Message:
+    if image_base64:
+        msg_type = MessageTypeEnum.image if not content or content == "[Фото]" else MessageTypeEnum.mixed
+    else:
+        msg_type = MessageTypeEnum.text
     msg = Message(
         conversation_id=conversation_id,
         sender=sender,
-        message_type=MessageTypeEnum.text,
+        message_type=msg_type,
         content=content,
+        media_url=image_base64,
     )
     db.add(msg)
     db.commit()
@@ -228,239 +175,325 @@ def _update_context(conv: Conversation, updates: dict) -> dict:
     return ctx
 
 
-def _cancel_reply(conv: Conversation) -> str:
-    """Handle tenant cancellation at any service state."""
-    conv.state = ConversationStateEnum.closed
-    conv.status = ConversationStatusEnum.closed
-    return "Хорошо, запрос отменён. Если понадобится помощь — напишите в любое время."
+# ── State context builder for Router ─────────────────────────────────────────
 
-
-# ── Service flow state handlers ──────────────────────────────────────────────
-
-def _handle_classified_service(
-    db: Session, conv: Conversation, tenant: Tenant, content: str, history: list[dict],
-) -> str:
-    """Entry point after classification. Initialize context and immediately collect details."""
-    _update_context(conv, {
-        "subtype": (conv.context_data or {}).get("subtype"),
-    })
-    conv.state = ConversationStateEnum.service_collecting_details
-    # Fall through to collecting details immediately
-    return _handle_collecting_details(db, conv, tenant, content, history)
-
-
-def _handle_collecting_details(
-    db: Session, conv: Conversation, tenant: Tenant, content: str, history: list[dict],
-) -> str:
-    """LLM extracts category, urgency, description. Asks for missing info."""
+def _build_state_context(conv: Conversation) -> str:
+    """Serialize conversation state + context_data into a text block for the Router."""
+    from .scheduler import TZ_ALMATY
+    now_almaty = datetime.now(TZ_ALMATY)
     ctx = conv.context_data or {}
-    extra = ""
-    if ctx.get("category") or ctx.get("urgency"):
-        extra = f"Previously extracted — category: {ctx.get('category')}, urgency: {ctx.get('urgency')}, description: {ctx.get('description')}"
+    lines = [
+        f"TODAY: {now_almaty.strftime('%Y-%m-%d')} ({now_almaty.strftime('%A')})",
+        f"CURRENT_TIME: {now_almaty.strftime('%H:%M')}",
+        f"CURRENT_STATE: {conv.state.value}",
+        "",
+        "ALREADY_COLLECTED:",
+        f"  service_category: {ctx.get('service_category') or ctx.get('category') or 'null'}",
+        f"  urgency: {ctx.get('urgency') or 'null'}",
+        f"  problem: {ctx.get('description') or ctx.get('problem') or 'null'}",
+        f"  location: {ctx.get('location') or 'null'}",
+        f"  danger_now: {ctx.get('danger_now') or 'null'}",
+        f"  preferred_date: {ctx.get('preferred_date') or 'null'}",
+        f"  photo_received: {ctx.get('photo_received') or 'null'}",
+    ]
 
-    data = call_llm(history, SERVICE_DETAILS_INSTRUCTION, extra)
-
-    if data.get("error"):
-        return "Извините, произошла техническая ошибка. Пожалуйста, повторите ваш запрос."
-
-    if data.get("cancel_requested"):
-        return _cancel_reply(conv)
-
-    # Store extracted details
-    updates = {}
-    for key in ("category", "urgency", "description", "location"):
-        if data.get(key):
-            updates[key] = data[key]
-    _update_context(conv, updates)
-
-    if data.get("details_complete"):
-        urgency = (conv.context_data or {}).get("urgency", "medium").lower()
-        if urgency in ("emergency", "high"):
-            conv.state = ConversationStateEnum.service_assessing_urgency
-        else:
-            conv.state = ConversationStateEnum.service_scheduling
-    # else: stay in service_collecting_details
-
-    return data.get("reply", "")
-
-
-def _handle_assessing_urgency(
-    db: Session, conv: Conversation, tenant: Tenant, content: str, history: list[dict],
-) -> str:
-    """Confirm emergency/high urgency with tenant."""
-    ctx = conv.context_data or {}
-    extra = f"Current urgency level: {ctx.get('urgency', 'unknown')}. Problem: {ctx.get('description', 'unknown')}"
-
-    data = call_llm(history, URGENCY_CONFIRM_INSTRUCTION, extra)
-
-    if data.get("error"):
-        # Skip urgency confirmation on error, proceed to scheduling
-        conv.state = ConversationStateEnum.service_scheduling
-        return "Давайте подберём удобное время для визита специалиста."
-
-    if data.get("cancel_requested"):
-        return _cancel_reply(conv)
-
-    if data.get("urgency_confirmed"):
-        _update_context(conv, {"urgency_confirmed": True})
-        conv.state = ConversationStateEnum.service_scheduling
-    elif data.get("revised_urgency"):
-        _update_context(conv, {"urgency": data["revised_urgency"], "urgency_confirmed": True})
-        conv.state = ConversationStateEnum.service_scheduling
-    # else: stay, LLM asked a follow-up
-
-    return data.get("reply", "")
-
-
-def _handle_scheduling(
-    db: Session, conv: Conversation, tenant: Tenant, content: str, history: list[dict],
-) -> str:
-    """Find slots and present them, or process tenant's slot selection."""
-    ctx = conv.context_data or {}
-
-    if not ctx.get("slots_presented"):
-        # Phase 1: Find and present slots
-        category = ctx.get("category", "other")
-        urgency = ctx.get("urgency", "medium")
-        slots = find_available_slots(db, category, urgency, num_slots=3)
-
-        # If no slots found with urgency window, widen to maximum window
-        if not slots:
-            slots = find_available_slots(db, category, "low", num_slots=3)
-
-        if not slots:
-            if urgency.lower() == "emergency":
-                # Only escalate for emergency when no technicians available at all
-                _escalate(conv, tenant, "", content, ScenarioEnum.service, None)
-                return "К сожалению, нет доступных специалистов для экстренного вызова. Ваш запрос передан диспетчеру."
-            else:
-                # Non-emergency: inform tenant, no escalation
-                return "К сожалению, сейчас нет доступных временных слотов. Попробуйте обратиться позже или уточните другую категорию проблемы."
-
-        _update_context(conv, {"offered_slots": slots, "slots_presented": True})
-
-        # Format slots for LLM
-        slots_text = "AVAILABLE TIME SLOTS:\n"
-        for i, s in enumerate(slots):
-            slots_text += f"{i+1}. {s['start']} — {s['end']} (Technician: {s['technician_name']})\n"
-
-        data = call_llm(history, SLOT_PRESENT_INSTRUCTION, slots_text)
-
-        if data.get("cancel_requested"):
-            return _cancel_reply(conv)
-
-        return data.get("reply", "")
-
-    else:
-        # Phase 2: Process tenant's selection
-        offered = ctx.get("offered_slots", [])
-        slots_text = "PREVIOUSLY OFFERED SLOTS:\n"
+    # Include offered slots if present
+    offered = ctx.get("offered_slots")
+    if offered:
+        lines.append("")
+        lines.append("OFFERED_SLOTS:")
         for i, s in enumerate(offered):
-            slots_text += f"{i+1}. {s['start']} — {s['end']} (Technician: {s['technician_name']})\n"
+            lines.append(f"  {i}. {s['start']} — {s['end']} (Technician: {s['technician_name']})")
 
-        data = call_llm(history, SLOT_SELECT_INSTRUCTION, slots_text)
+    # Include selected slot if present
+    selected_idx = ctx.get("selected_slot_index")
+    if selected_idx is not None and offered and selected_idx < len(offered):
+        slot = offered[selected_idx]
+        lines.append("")
+        lines.append(f"SELECTED_SLOT: index={selected_idx}, {slot['start']} — {slot['end']} (Technician: {slot['technician_name']})")
 
-        if data.get("error"):
-            # Re-present the same slots instead of escalating
-            return "Извините, не удалось обработать ваш выбор. Пожалуйста, укажите номер слота из предложенных вариантов."
+    # Include ticket number if already created
+    ticket_number = ctx.get("ticket_number")
+    if ticket_number:
+        lines.append("")
+        lines.append(f"TICKET_CREATED: {ticket_number}")
 
-        if data.get("cancel_requested"):
-            return _cancel_reply(conv)
+    lines.append("")
+    lines.append("Analyze the tenant's latest message in the context above and return the routing JSON.")
 
-        if data.get("needs_more_options"):
-            # Widen search
-            slots = find_available_slots(db, ctx.get("category", "other"), "low", num_slots=5)
-            if not slots:
-                return "К сожалению, других доступных слотов нет. Пожалуйста, выберите из предложенных ранее вариантов."
-            _update_context(conv, {"offered_slots": slots, "slots_presented": False})
-            return _handle_scheduling(db, conv, tenant, content, history)
-
-        selected = data.get("selected_index")
-        if selected is not None and 0 <= selected < len(offered):
-            slot = offered[selected]
-            if not verify_slot_available(db, slot["technician_id"], slot["start"]):
-                _update_context(conv, {"slots_presented": False})
-                return _handle_scheduling(db, conv, tenant, content, history)
-
-            _update_context(conv, {"selected_slot_index": selected})
-            conv.state = ConversationStateEnum.service_ready_for_ticket
-            return data.get("reply", "")
-        else:
-            return data.get("reply", "")
+    return "\n".join(lines)
 
 
-def _handle_ready_for_ticket(
-    db: Session, conv: Conversation, tenant: Tenant, content: str, history: list[dict],
-) -> str:
-    """Summarize details and ask for final confirmation."""
-    ctx = conv.context_data or {}
-    offered = ctx.get("offered_slots", [])
-    selected_idx = ctx.get("selected_slot_index", 0)
-    slot = offered[selected_idx] if selected_idx < len(offered) else {}
+# ── Router output → legacy AgentResponse mapping ────────────────────────────
 
-    summary = (
-        f"BOOKING SUMMARY:\n"
-        f"Problem: {ctx.get('description', 'N/A')}\n"
-        f"Category: {ctx.get('category', 'N/A')}\n"
-        f"Urgency: {ctx.get('urgency', 'N/A')}\n"
-        f"Scheduled: {slot.get('start', 'N/A')} — {slot.get('end', 'N/A')}\n"
-        f"Technician: {slot.get('technician_name', 'N/A')}"
+def _router_to_agent_response(router: RouterResponse, reply: str) -> AgentResponse:
+    """Map Router output to the legacy AgentResponse for backward compatibility."""
+    classified = router.intent is not None and router.intent != "unknown"
+    return AgentResponse(
+        reply=reply,
+        classified=classified,
+        scenario=router.intent,
+        confidence=0.9 if classified else None,
+        subtype=router.service_category,
+        requires_human=router.requires_human,
     )
-
-    data = call_llm(history, CONFIRM_INSTRUCTION, summary)
-
-    if data.get("error"):
-        return "Извините, произошла ошибка. Пожалуйста, подтвердите бронирование: ответьте «да» или «нет»."
-
-    if data.get("cancel_requested"):
-        return _cancel_reply(conv)
-
-    if data.get("confirmed"):
-        ticket = create_ticket_from_context(db, tenant.id, ctx)
-        _update_context(conv, {"ticket_number": ticket.ticket_number})
-        conv.state = ConversationStateEnum.ticket_created
-        return data.get("reply", "")
-
-    return data.get("reply", "")
-
-
-def _handle_ticket_created(
-    db: Session, conv: Conversation, tenant: Tenant, content: str, history: list[dict],
-) -> str:
-    """Ticket already created — acknowledge and close."""
-    ctx = conv.context_data or {}
-    ticket_number = ctx.get("ticket_number", "")
-    conv.state = ConversationStateEnum.closed
-    conv.status = ConversationStatusEnum.closed
-    return f"Ваша заявка {ticket_number} уже создана. Если возникнут вопросы — напишите нам."
-
-
-# ── State handler dispatch table ─────────────────────────────────────────────
-
-SERVICE_STATE_HANDLERS = {
-    ConversationStateEnum.classified_service: _handle_classified_service,
-    ConversationStateEnum.service_collecting_details: _handle_collecting_details,
-    ConversationStateEnum.service_assessing_urgency: _handle_assessing_urgency,
-    ConversationStateEnum.service_scheduling: _handle_scheduling,
-    ConversationStateEnum.service_ready_for_ticket: _handle_ready_for_ticket,
-    ConversationStateEnum.ticket_created: _handle_ticket_created,
-}
 
 
 # ── Main entry point ─────────────────────────────────────────────────────────
 
-def handle_message(db: Session, phone: str, content: str) -> tuple[str, str, AgentResponse | None]:
-    """Process an incoming message and return (reply, state, agent_response).
+def save_incoming_message(
+    db: Session, phone: str, content: str, *, image_base64: str | None = None,
+) -> tuple[Tenant | None, Conversation | None, str]:
+    """Save an incoming tenant message to DB without processing it."""
+    tenant = _find_tenant(db, phone)
+    if not tenant:
+        return None, None, ""
 
-    Args:
-        db: Database session.
-        phone: Tenant phone (digits or formatted).
-        content: Message text.
+    chat_id = f"{_digits_only(phone)}@c.us"
+    conv = _get_or_create_conversation(db, tenant, chat_id)
+    _save_message(db, conv.id, MessageSenderEnum.tenant, content, image_base64=image_base64)
+
+    return tenant, conv, chat_id
+
+
+def process_conversation(
+    db: Session, conv: Conversation, tenant: Tenant, phone: str,
+) -> tuple[str, str, AgentResponse | None]:
+    """Two-step pipeline: Route → Action → Write.
+
+    1. Build state context from conversation
+    2. Call Router (step 1) for classification + workflow control
+    3. Execute backend actions (find slots, create ticket, escalate)
+    4. Call Writer (step 2) for tenant-facing reply
+    5. Update state and save reply
 
     Returns:
         Tuple of (reply_text, conversation_state, agent_response_or_none).
     """
-    tenant = _find_tenant(db, phone)
+    history = _get_message_history(db, conv.id, since=conv.reopened_at)
+
+    # Extract last tenant message
+    last_tenant_content = ""
+    for msg in reversed(history):
+        if msg["role"] == "tenant":
+            last_tenant_content = msg["content"]
+            break
+
+    # ── Step 1: Route ────────────────────────────────────────────────────
+    state_context = _build_state_context(conv)
+    router_raw = step1_route(history, state_context)
+
+    # Parse with Pydantic (graceful fallback on bad data)
+    try:
+        router = RouterResponse(**router_raw)
+    except Exception:
+        logger.warning("Failed to parse router response, using defaults: %s", router_raw)
+        router = RouterResponse(
+            intent="unknown", requires_human=True, next_step="escalate",
+        )
+
+    logger.info(
+        "Router: intent=%s next_step=%s cancel=%s human=%s ticket=%s",
+        router.intent, router.next_step, router.cancel_requested,
+        router.requires_human, router.ready_for_ticket,
+    )
+
+    # ── Step 2: Execute backend actions ──────────────────────────────────
+    backend_results: dict = {}
+
+    # Handle cancellation
+    if router.cancel_requested:
+        conv.state = ConversationStateEnum.closed
+        conv.status = ConversationStatusEnum.closed
+        reply = step2_write(router_raw, last_tenant_content, {"action": "cancelled"})
+        db.commit()
+        _save_message(db, conv.id, MessageSenderEnum.ai, reply)
+        agent_resp = _router_to_agent_response(router, reply)
+        return reply, conv.state.value, agent_resp
+
+    # Handle escalation
+    if router.requires_human:
+        scenario = INTENT_SCENARIO_MAP.get(router.intent or "unknown", ScenarioEnum.unknown)
+        _escalate(conv, tenant, phone, last_tenant_content, scenario, None)
+        reply = step2_write(router_raw, last_tenant_content, {"action": "escalated"})
+        db.commit()
+        _save_message(db, conv.id, MessageSenderEnum.ai, reply)
+        agent_resp = _router_to_agent_response(router, reply)
+        return reply, conv.state.value, agent_resp
+
+    # Update collected fields into context_data
+    cf = router.collected_fields
+    field_updates = {}
+    if cf.problem:
+        field_updates["description"] = cf.problem
+        field_updates["problem"] = cf.problem
+    if cf.location:
+        field_updates["location"] = cf.location
+    if cf.danger_now is not None:
+        field_updates["danger_now"] = cf.danger_now
+    if cf.preferred_date:
+        field_updates["preferred_date"] = cf.preferred_date
+    if cf.photo_received is not None:
+        field_updates["photo_received"] = cf.photo_received
+    if router.service_category:
+        field_updates["category"] = router.service_category
+        field_updates["service_category"] = router.service_category
+    if router.urgency:
+        field_updates["urgency"] = router.urgency
+    if field_updates:
+        _update_context(conv, field_updates)
+
+    # Update scenario if intent is known
+    if router.intent and router.intent != "unknown":
+        scenario = INTENT_SCENARIO_MAP.get(router.intent)
+        if scenario:
+            conv.scenario = scenario
+
+    # Handle slot offering
+    if router.next_step == "offer_slots":
+        ctx = conv.context_data or {}
+        category = ctx.get("category", "other")
+        urgency = ctx.get("urgency", "medium")
+        preferred_date_str = ctx.get("preferred_date")
+
+        slots = []
+        if preferred_date_str:
+            # Tenant specified a preferred date — search that date only
+            try:
+                target = date_type.fromisoformat(preferred_date_str)
+                slots = find_slots_for_date(db, category, target)
+                logger.info("Slots for %s (%s): %d found", preferred_date_str, category, len(slots))
+            except ValueError:
+                logger.warning("Invalid preferred_date: %s", preferred_date_str)
+
+            if not slots:
+                # No slots on requested date — ask for another day (no fallback to other dates)
+                _update_context(conv, {"preferred_date": None})
+                backend_results["action"] = "no_slots_on_date"
+                backend_results["requested_date"] = preferred_date_str
+                router = router.model_copy(update={"next_step": "ask_preferred_day"})
+                router_raw = router.model_dump()
+        else:
+            # No preferred date — search across urgency window
+            slots = find_available_slots(db, category, urgency, num_slots=3)
+            if not slots:
+                slots = find_available_slots(db, category, "low", num_slots=3)
+
+        if slots:
+            _update_context(conv, {"offered_slots": slots, "slots_presented": True})
+            backend_results["available_slots"] = [
+                {"index": i, "start": s["start"], "end": s["end"], "technician_name": s["technician_name"]}
+                for i, s in enumerate(slots)
+            ]
+        elif "action" not in backend_results:
+            if urgency == "emergency":
+                scenario = INTENT_SCENARIO_MAP.get(router.intent or "unknown", ScenarioEnum.unknown)
+                _escalate(conv, tenant, phone, last_tenant_content, scenario, None)
+                backend_results["action"] = "no_slots_emergency_escalated"
+            else:
+                backend_results["action"] = "no_slots_available"
+
+    # Handle slot selection from router
+    if cf.time_slot is not None:
+        ctx = conv.context_data or {}
+        offered = ctx.get("offered_slots", [])
+        selected_idx = cf.time_slot
+        logger.info("Slot selection: index=%s, offered=%d slots", selected_idx, len(offered))
+
+        if 0 <= selected_idx < len(offered):
+            slot = offered[selected_idx]
+            logger.info("Selected slot: %s — %s (tech: %s)", slot["start"], slot["end"], slot["technician_name"])
+            if verify_slot_available(db, slot["technician_id"], slot["start"]):
+                _update_context(conv, {"selected_slot_index": selected_idx})
+                backend_results["selected_slot"] = {
+                    "index": selected_idx,
+                    "start": slot["start"],
+                    "end": slot["end"],
+                    "technician_name": slot["technician_name"],
+                }
+            else:
+                # Slot taken — re-fetch
+                _update_context(conv, {"slots_presented": False})
+                category = ctx.get("category", "other")
+                urgency = ctx.get("urgency", "medium")
+                new_slots = find_available_slots(db, category, urgency, num_slots=3)
+                if new_slots:
+                    _update_context(conv, {"offered_slots": new_slots, "slots_presented": True})
+                    backend_results["available_slots"] = [
+                        {"index": i, "start": s["start"], "end": s["end"], "technician_name": s["technician_name"]}
+                        for i, s in enumerate(new_slots)
+                    ]
+                    backend_results["slot_unavailable"] = True
+                    # Override next_step since we need to re-offer
+                    router = router.model_copy(update={"next_step": "offer_slots", "ready_for_confirmation": False})
+                    router_raw = router.model_dump()
+
+    # Build confirmation summary if needed
+    if router.ready_for_confirmation or router.next_step == "confirm":
+        ctx = conv.context_data or {}
+        offered = ctx.get("offered_slots", [])
+        selected_idx = ctx.get("selected_slot_index")
+        slot = offered[selected_idx] if selected_idx is not None and selected_idx < len(offered) else {}
+        backend_results["confirmation_summary"] = {
+            "problem": ctx.get("description") or ctx.get("problem", "N/A"),
+            "category": ctx.get("category", "N/A"),
+            "urgency": ctx.get("urgency", "N/A"),
+            "scheduled_start": slot.get("start", "N/A"),
+            "scheduled_end": slot.get("end", "N/A"),
+            "technician_name": slot.get("technician_name", "N/A"),
+        }
+
+    # Handle ticket creation (guard against duplicates)
+    ctx = conv.context_data or {}
+    if router.ready_for_ticket and not ctx.get("ticket_number"):
+        ticket = create_ticket_from_context(db, tenant.id, ctx, conv.id)
+        _update_context(conv, {"ticket_number": ticket.ticket_number})
+        backend_results["ticket_created"] = {
+            "ticket_number": ticket.ticket_number,
+        }
+
+    # Handle already-created ticket (tenant messages after ticket_created)
+    ctx = conv.context_data or {}
+    if ctx.get("ticket_number") and "ticket_created" not in backend_results:
+        backend_results["existing_ticket"] = ctx["ticket_number"]
+
+    # ── Step 3: Write ────────────────────────────────────────────────────
+    reply = step2_write(router_raw, last_tenant_content, backend_results or None)
+
+    # ── Step 4: Update state ─────────────────────────────────────────────
+    new_state = NEXT_STEP_STATE_MAP.get(router.next_step)
+    if new_state:
+        conv.state = new_state
+        if new_state == ConversationStateEnum.closed:
+            conv.status = ConversationStatusEnum.closed
+
+    # If ticket was just created, move to ticket_created
+    if "ticket_created" in backend_results:
+        conv.state = ConversationStateEnum.ticket_created
+
+    # After close_or_continue, clear context and history so next message starts fresh
+    if router.next_step == "close_or_continue":
+        conv.context_data = {}
+        conv.scenario = None
+        conv.reopened_at = datetime.now(timezone.utc)
+
+    db.commit()
+
+    _save_message(db, conv.id, MessageSenderEnum.ai, reply)
+
+    agent_resp = _router_to_agent_response(router, reply)
+    return reply, conv.state.value, agent_resp
+
+
+def handle_message(
+    db: Session, phone: str, content: str, *, image_base64: str | None = None,
+) -> tuple[str, str, AgentResponse | None]:
+    """Process an incoming message and return (reply, state, agent_response).
+
+    Convenience wrapper that saves the message and immediately processes.
+    For buffered processing, use save_incoming_message + process_conversation separately.
+    """
+    tenant, conv, chat_id = save_incoming_message(db, phone, content, image_base64=image_base64)
     if not tenant:
         return (
             "Извините, ваш номер не найден в системе. Обратитесь в управляющую компанию для регистрации.",
@@ -468,69 +501,4 @@ def handle_message(db: Session, phone: str, content: str) -> tuple[str, str, Age
             None,
         )
 
-    chat_id = f"{_digits_only(phone)}@c.us"
-    conv = _get_or_create_conversation(db, tenant, chat_id)
-
-    _save_message(db, conv.id, MessageSenderEnum.tenant, content)
-
-    history = _get_message_history(db, conv.id)
-    agent_resp = None
-    reply = ""
-
-    # ── Classification phase ─────────────────────────────────────────────
-    if conv.state in (
-        ConversationStateEnum.new_conversation,
-        ConversationStateEnum.gathering,
-    ):
-        agent_resp = process_message(history)
-        reply = agent_resp.reply
-
-        if agent_resp.requires_human:
-            _escalate(conv, tenant, phone, content, ScenarioEnum.unknown, agent_resp.confidence)
-        elif agent_resp.classified and agent_resp.confidence is not None and agent_resp.confidence >= CONFIDENCE_THRESHOLD:
-            scenario_key = agent_resp.scenario
-            if scenario_key in SCENARIO_STATE_MAP:
-                conv.state = SCENARIO_STATE_MAP[scenario_key]
-                conv.scenario = ScenarioEnum(scenario_key)
-                conv.classifier_confidence = agent_resp.confidence
-
-                # For service: store subtype in context and immediately start flow
-                if scenario_key == "service":
-                    _update_context(conv, {"subtype": agent_resp.subtype})
-            else:
-                _escalate(conv, tenant, phone, content, ScenarioEnum.unknown, agent_resp.confidence)
-        elif agent_resp.classified and agent_resp.confidence is not None and agent_resp.confidence < CONFIDENCE_THRESHOLD:
-            scenario = ScenarioEnum(agent_resp.scenario) if agent_resp.scenario in [e.value for e in ScenarioEnum] else ScenarioEnum.unknown
-            _escalate(conv, tenant, phone, content, scenario, agent_resp.confidence)
-        else:
-            conv.state = ConversationStateEnum.gathering
-
-    # ── Service flow states ──────────────────────────────────────────────
-    elif conv.state in SERVICE_STATE_HANDLERS:
-        handler = SERVICE_STATE_HANDLERS[conv.state]
-        reply = handler(db, conv, tenant, content, history)
-
-    # ── Escalated ────────────────────────────────────────────────────────
-    elif conv.state == ConversationStateEnum.escalated_to_human:
-        reply = "Ваш запрос уже передан диспетчеру. Ожидайте ответа."
-
-    # ── Other classified scenarios (faq, billing, announcement) ──────────
-    elif conv.state in (
-        ConversationStateEnum.classified_faq,
-        ConversationStateEnum.classified_billing,
-        ConversationStateEnum.classified_announcement,
-    ):
-        reply = f"Ваш запрос уже классифицирован как '{conv.scenario.value if conv.scenario else 'unknown'}'. Обработка будет добавлена в следующей версии."
-
-    # ── Closed ───────────────────────────────────────────────────────────
-    elif conv.state == ConversationStateEnum.closed:
-        reply = "Ваш предыдущий запрос был завершён. Если нужна помощь — начните новый диалог."
-
-    else:
-        reply = "Ваш запрос обрабатывается. Ожидайте."
-
-    db.commit()
-
-    _save_message(db, conv.id, MessageSenderEnum.ai, reply)
-
-    return reply, conv.state.value, agent_resp
+    return process_conversation(db, conv, tenant, phone)

@@ -41,3 +41,21 @@ def send_escalation_alert(
         logger.info("Escalation alert sent to group %s", _GROUP_CHAT_ID)
     except Exception:
         logger.exception("Failed to send escalation alert")
+
+
+def send_whatsapp_reply(chat_id: str, text: str) -> None:
+    """Send a WhatsApp message to a chat. Fire-and-forget."""
+    if not all([_ID_INSTANCE, _API_TOKEN]):
+        logger.warning("WhatsApp reply not sent: missing ID_INSTANCE or API_TOKEN_INSTANCE")
+        return
+
+    url = f"{_API_URL}/waInstance{_ID_INSTANCE}/sendMessage/{_API_TOKEN}"
+    payload = {"chatId": chat_id, "message": text}
+
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(url, json=payload)
+            resp.raise_for_status()
+        logger.info("WhatsApp reply sent to %s", chat_id)
+    except Exception:
+        logger.exception("Failed to send WhatsApp reply to %s", chat_id)

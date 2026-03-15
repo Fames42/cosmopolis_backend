@@ -37,7 +37,8 @@ def format_ticket_detail(ticket: models.Ticket) -> schemas.TicketDispatcherDetai
     issue_details = schemas.IssueDetailsSchema(
         category=ticket.category or "General",
         urgency=ticket.urgency or "LOW",
-        description=ticket.description or ""
+        description=ticket.description or "",
+        photo_urls=ticket.photo_urls,
     )
     notes = [
         schemas.TicketNoteSchema(
@@ -142,6 +143,16 @@ def update_ticket(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid date format: {ticket_update['scheduledDate']}")
 
+    if "urgency" in ticket_update:
+        allowed = {"low", "medium", "high", "emergency"}
+        urgency_str = ticket_update["urgency"].upper()
+        if urgency_str.lower() not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid urgency: {ticket_update['urgency']}. Allowed: {', '.join(allowed)}",
+            )
+        ticket.urgency = urgency_str
+
     db.commit()
     db.refresh(ticket)
     return format_ticket_detail(ticket)
@@ -177,3 +188,21 @@ def add_note(
         text=new_note.text,
         role=current_user.role.value
     )
+
+
+@router.get("/{ticket_id}/photo")
+def get_ticket_photo(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Get photos attached to a ticket. Returns {photo_urls: ["data:image/...;base64,..."]} or 404."""
+    ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()
+    if not ticket:
+        if ticket_id.isdigit():
+            ticket = db.query(models.Ticket).filter(models.Ticket.id == int(ticket_id)).first()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    if not ticket.photo_urls:
+        raise HTTPException(status_code=404, detail="No photos attached to this ticket")
+    return {"photo_urls": ticket.photo_urls}

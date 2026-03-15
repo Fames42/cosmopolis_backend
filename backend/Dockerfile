@@ -13,10 +13,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+COPY rules.txt ./rules.txt
+COPY prompts/ ./prompts/
 
 EXPOSE 8000
 
 CMD ["gunicorn", "src.main:app", \
-     "--workers", "4", \
+     "--workers", "1", \
      "--worker-class", "uvicorn.workers.UvicornWorker", \
      "--bind", "0.0.0.0:8000"]

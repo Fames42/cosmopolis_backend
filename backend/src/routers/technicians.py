@@ -1,12 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from typing import List
-from datetime import datetime, timezone
+from typing import List, Optional
+from datetime import datetime, timezone, date, timedelta
 
 from .. import models, schemas
 from ..database import get_db
-from ..auth import get_current_user, check_role
+from ..auth import get_current_user, get_dispatcher_user, check_role
 
 router = APIRouter()
 
@@ -88,6 +88,41 @@ def get_technicians(
         for t, count in techs
     ]
 
+@router.get("/schedules", response_model=List[schemas.TechnicianScheduleOverview])
+def get_all_technician_schedules(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_dispatcher_user),
+):
+    """Get all technicians' weekly schedules. Dispatcher/admin only."""
+    techs = (
+        db.query(models.User)
+        .filter(models.User.role == models.RoleEnum.technician)
+        .all()
+    )
+    result = []
+    for tech in techs:
+        schedules = (
+            db.query(models.TechnicianSchedule)
+            .filter(models.TechnicianSchedule.technician_id == tech.id)
+            .order_by(models.TechnicianSchedule.day_of_week)
+            .all()
+        )
+        result.append(schemas.TechnicianScheduleOverview(
+            technician_id=tech.id,
+            technician_name=tech.name,
+            specialties=tech.specialties or [],
+            schedules=[
+                schemas.TechnicianScheduleItem(
+                    day_of_week=s.day_of_week,
+                    start_time=s.start_time,
+                    end_time=s.end_time,
+                )
+                for s in schedules
+            ],
+        ))
+    return result
+
+
 @router.post("", response_model=schemas.TechnicianResponse)
 def create_technician(
     tech: schemas.TechnicianCreate,
@@ -166,11 +201,54 @@ def update_technician(
         "status": "ACTIVE"
     }
 
+@router.get("/me/schedule", response_model=List[schemas.TechnicianScheduleResponse])
+def get_my_schedule(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Get the current technician's own weekly schedule."""
+    schedules = (
+        db.query(models.TechnicianSchedule)
+        .filter(models.TechnicianSchedule.technician_id == current_user.id)
+        .order_by(models.TechnicianSchedule.day_of_week)
+        .all()
+    )
+    return schedules
+
+
+@router.put("/me/schedule", response_model=List[schemas.TechnicianScheduleResponse])
+def set_my_schedule(
+    body: schemas.TechnicianScheduleBulkUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Bulk-replace the current technician's own weekly schedule."""
+    db.query(models.TechnicianSchedule).filter(
+        models.TechnicianSchedule.technician_id == current_user.id,
+    ).delete()
+
+    new_schedules = []
+    for item in body.schedules:
+        s = models.TechnicianSchedule(
+            technician_id=current_user.id,
+            day_of_week=item.day_of_week,
+            start_time=item.start_time,
+            end_time=item.end_time,
+        )
+        db.add(s)
+        new_schedules.append(s)
+
+    db.commit()
+    for s in new_schedules:
+        db.refresh(s)
+    return new_schedules
+
+
 @router.get("/{tech_id}/schedule", response_model=List[schemas.TechnicianScheduleResponse])
 def get_technician_schedule(
     tech_id: str,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_dispatcher_user),
 ):
     tech = db.query(models.User).filter(
         models.User.id == tech_id,
@@ -193,7 +271,7 @@ def set_technician_schedule(
     tech_id: str,
     body: schemas.TechnicianScheduleBulkUpdate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_dispatcher_user),
 ):
     tech = db.query(models.User).filter(
         models.User.id == tech_id,
@@ -223,6 +301,48 @@ def set_technician_schedule(
     for s in new_schedules:
         db.refresh(s)
     return new_schedules
+
+
+@router.get("/{tech_id}/workload", response_model=schemas.TechnicianWorkloadResponse)
+def get_technician_workload(
+    tech_id: str,
+    date_from: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[date] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_dispatcher_user),
+):
+    """Get a technician's assigned tickets, optionally filtered by date range. Dispatcher/admin only."""
+    tech = db.query(models.User).filter(
+        models.User.id == tech_id,
+        models.User.role == models.RoleEnum.technician,
+    ).first()
+    if not tech:
+        raise HTTPException(status_code=404, detail="Техник не найден")
+
+    query = db.query(models.Ticket).filter(models.Ticket.assigned_to == tech_id)
+
+    if date_from:
+        query = query.filter(models.Ticket.scheduled_time >= datetime.combine(date_from, datetime.min.time()))
+    if date_to:
+        query = query.filter(models.Ticket.scheduled_time < datetime.combine(date_to + timedelta(days=1), datetime.min.time()))
+
+    tickets = query.order_by(models.Ticket.scheduled_time.asc().nullslast()).all()
+
+    return schemas.TechnicianWorkloadResponse(
+        technician_id=tech.id,
+        technician_name=tech.name,
+        tickets=[
+            schemas.TechnicianWorkloadItem(
+                ticket_number=t.ticket_number,
+                category=t.category or "General",
+                urgency=t.urgency or "low",
+                status=t.status.value if t.status else "new",
+                scheduled_time=t.scheduled_time,
+                description=t.description or "",
+            )
+            for t in tickets
+        ],
+    )
 
 
 @router.get("/me/tickets", response_model=List[schemas.TicketTechnicianListResponse])

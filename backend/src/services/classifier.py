@@ -1,46 +1,15 @@
+"""Two-step LLM pipeline: Router (classification) + Writer (tenant-facing reply)."""
+
 import os
 import json
 import logging
 from pathlib import Path
 from openai import OpenAI
 
-from ..schemas import AgentResponse
-
 logger = logging.getLogger("uvicorn.error")
 
 _client = None
-_system_prompt = None
-
-AGENT_INSTRUCTION = """Based on the full conversation history above, do TWO things:
-
-1. **Reply** to the tenant naturally. Match the language they use (Russian → Russian, English → English, etc.).
-   - If they greet you, greet back warmly and ask how you can help.
-   - If they describe an issue or ask a question, acknowledge it.
-   - Keep replies concise: 1-2 sentences.
-
-2. **Classify** their intent — but ONLY if you have enough information.
-   - If the conversation is just greetings or vague ("I have a problem"), set classified=false.
-   - If the tenant has clearly stated their intent, set classified=true with scenario/confidence/subtype.
-
-Return ONLY valid JSON with this exact structure:
-{
-  "reply": "your reply to the tenant",
-  "classified": true or false,
-  "scenario": "service" | "faq" | "billing" | "announcement" | "unknown" | null,
-  "confidence": 0.0 to 1.0 or null,
-  "subtype": "brief_label_of_specific_issue" or null,
-  "requires_human": true or false
-}
-
-Scenario rules:
-- "service" = maintenance/repair request (AC broken, leak, electrical issue, etc.)
-- "faq" = question about policies, hours, rules, procedures
-- "billing" = payment, utility bill, receipt, due date inquiry
-- "announcement" = inbound information/notice (water shutdown, maintenance schedule, etc.)
-- "unknown" = cannot determine intent even after conversation
-- Set requires_human=true if the message is aggressive, confusing, or involves legal/contract issues
-- When classified=false, set scenario, confidence, and subtype to null
-- When classified=true, confidence below 0.65 means you are unsure"""
+_prompts: dict[str, str] = {}
 
 
 def _get_client() -> OpenAI:
@@ -51,105 +20,50 @@ def _get_client() -> OpenAI:
     return _client
 
 
-def _get_system_prompt() -> str:
-    global _system_prompt
-    if _system_prompt is None:
-        rules_path = Path(__file__).resolve().parent.parent.parent / "rules.txt"
-        if rules_path.exists():
-            _system_prompt = rules_path.read_text(encoding="utf-8")
+def _load_prompt(name: str) -> str:
+    """Load and cache a prompt file from the prompts/ directory."""
+    if name not in _prompts:
+        prompt_path = Path(__file__).resolve().parent.parent.parent / "prompts" / f"{name}.txt"
+        if prompt_path.exists():
+            _prompts[name] = prompt_path.read_text(encoding="utf-8")
         else:
-            _system_prompt = "You are an AI maintenance helpdesk assistant for a property management company."
-    return _system_prompt
+            logger.error("Prompt file not found: %s", prompt_path)
+            _prompts[name] = ""
+    return _prompts[name]
 
 
-def process_message(message_history: list[dict[str, str]]) -> AgentResponse:
-    """Process tenant message: generate reply and optionally classify intent.
-
-    Args:
-        message_history: List of {"role": "tenant"|"ai", "content": "..."} dicts.
-
-    Returns:
-        AgentResponse with reply, classification status, and optional scenario.
-    """
-    try:
-        client = _get_client()
-        system_prompt = _get_system_prompt()
-
-        messages = [{"role": "system", "content": system_prompt}]
-
-        for msg in message_history[-20:]:
-            role = "user" if msg["role"] == "tenant" else "assistant"
-            messages.append({"role": role, "content": msg["content"]})
-
-        messages.append({"role": "user", "content": AGENT_INSTRUCTION})
-
-        response = client.chat.completions.create(
-            model="gpt-5.4",
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.1,
-            max_completion_tokens=500,
-        )
-
-        raw = response.choices[0].message.content
-        data = json.loads(raw)
-
-        return AgentResponse(
-            reply=data.get("reply", ""),
-            classified=bool(data.get("classified", False)),
-            scenario=data.get("scenario"),
-            confidence=float(data["confidence"]) if data.get("confidence") is not None else None,
-            subtype=data.get("subtype"),
-            requires_human=bool(data.get("requires_human", False)),
-        )
-
-    except Exception as e:
-        logger.error(f"Agent processing failed: {e}")
-        return AgentResponse(
-            reply="Произошла ошибка. Ваш запрос передан диспетчеру.",
-            classified=False,
-            scenario=None,
-            confidence=None,
-            subtype=None,
-            requires_human=True,
-        )
-
-
-def call_llm(
+def step1_route(
     message_history: list[dict[str, str]],
-    instruction: str,
-    extra_context: str = "",
+    state_context: str,
 ) -> dict:
-    """Generic LLM call with a custom instruction.
+    """Step 1: Router / state extractor.
 
-    Used by orchestrator state handlers for detail extraction, slot
-    presentation, selection parsing, and confirmation.
+    Analyzes tenant message + conversation state, returns structured JSON
+    for backend processing. No tenant-facing prose.
 
     Args:
-        message_history: Conversation messages [{"role": "tenant"|"ai", "content": "..."}].
-        instruction: Task-specific instruction appended as the last user message.
-        extra_context: Optional extra context (e.g. available slots JSON) prepended to instruction.
+        message_history: List of {"role": "tenant"|"ai", "content": "..."}.
+        state_context: Serialized conversation state (current step, collected fields, offered slots).
 
     Returns:
-        Parsed JSON dict from the LLM response, or a fallback error dict.
+        Parsed JSON dict matching the RouterResponse schema.
     """
     try:
         client = _get_client()
-        system_prompt = _get_system_prompt()
+        router_prompt = _load_prompt("router")
 
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": router_prompt}]
         for msg in message_history[-20:]:
             role = "user" if msg["role"] == "tenant" else "assistant"
             messages.append({"role": role, "content": msg["content"]})
 
-        full_instruction = f"{extra_context}\n\n{instruction}" if extra_context else instruction
-        messages.append({"role": "user", "content": full_instruction})
+        messages.append({"role": "user", "content": state_context})
 
         response = client.chat.completions.create(
             model="gpt-5.4",
             messages=messages,
             response_format={"type": "json_object"},
-            temperature=0.1,
+            temperature=0.05,
             max_completion_tokens=500,
         )
 
@@ -157,5 +71,72 @@ def call_llm(
         return json.loads(raw)
 
     except Exception as e:
-        logger.error(f"LLM call failed: {e}")
-        return {"reply": "Произошла ошибка. Ваш запрос передан диспетчеру.", "error": True}
+        logger.error("Router (step1) failed: %s", e)
+        return {
+            "language": "ru",
+            "intent": "unknown",
+            "requires_human": True,
+            "cancel_requested": False,
+            "service_category": None,
+            "urgency": None,
+            "collected_fields": {},
+            "missing_fields": [],
+            "next_step": "escalate",
+            "ready_for_confirmation": False,
+            "ready_for_ticket": False,
+            "notes_for_backend": {},
+        }
+
+
+def step2_write(
+    router_json: dict,
+    last_tenant_message: str,
+    backend_results: dict | None = None,
+) -> str:
+    """Step 2: Tenant-facing response writer.
+
+    Takes the Router JSON + tenant message + optional backend results,
+    returns a friendly WhatsApp message as plain text.
+
+    Args:
+        router_json: Output from step1_route().
+        last_tenant_message: The tenant's most recent message text.
+        backend_results: Optional dict with slots, ticket_id, faq_answer, etc.
+
+    Returns:
+        Plain text reply string for the tenant.
+    """
+    try:
+        client = _get_client()
+        writer_prompt = _load_prompt("writer")
+
+        # Build the input for the writer
+        parts = [
+            "WORKFLOW JSON:",
+            json.dumps(router_json, ensure_ascii=False, indent=2),
+            "",
+            "TENANT MESSAGE:",
+            last_tenant_message,
+        ]
+        if backend_results:
+            parts.extend(["", "BACKEND RESULTS:", json.dumps(backend_results, ensure_ascii=False, indent=2)])
+
+        user_content = "\n".join(parts)
+
+        messages = [
+            {"role": "system", "content": writer_prompt},
+            {"role": "user", "content": user_content},
+        ]
+
+        response = client.chat.completions.create(
+            model="gpt-5.4",
+            messages=messages,
+            temperature=0.3,
+            max_completion_tokens=300,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        logger.error("Writer (step2) failed: %s", e)
+        return "Произошла ошибка. Ваш запрос передан диспетчеру.\nAn error occurred. Your request has been forwarded to the dispatcher."

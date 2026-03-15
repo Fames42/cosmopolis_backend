@@ -134,7 +134,7 @@ class TicketBase(BaseModel):
     category: str
     urgency: str
     description: str
-    photo_url: Optional[str] = None
+    photo_urls: Optional[List[str]] = None
     availability_time: str
     status: TicketStatusEnum = TicketStatusEnum.new
     scheduled_time: Optional[datetime] = None
@@ -146,7 +146,7 @@ class TicketUpdate(BaseModel):
     category: Optional[str] = None
     urgency: Optional[str] = None
     description: Optional[str] = None
-    photo_url: Optional[str] = None
+    photo_urls: Optional[List[str]] = None
     availability_time: Optional[str] = None
     assigned_to: Optional[str] = None
     status: Optional[TicketStatusEnum] = None
@@ -212,6 +212,7 @@ class IssueDetailsSchema(BaseModel):
     category: str
     urgency: str
     description: str
+    photo_urls: Optional[List[str]] = None
 
 class TicketDispatcherDetailResponse(BaseModel):
     id: str
@@ -249,6 +250,55 @@ class TicketTechnicianDetailResponse(BaseModel):
 
 class TicketUpdateStatus(BaseModel):
     status: str
+
+# --- Manager Schedule Overview Schemas ---
+class TechnicianScheduleOverview(BaseModel):
+    technician_id: str
+    technician_name: str
+    specialties: List[str] = []
+    schedules: List[TechnicianScheduleItem] = []
+
+class TechnicianWorkloadItem(BaseModel):
+    ticket_number: str
+    category: str
+    urgency: str
+    status: str
+    scheduled_time: Optional[datetime] = None
+    description: str = ""
+
+class TechnicianWorkloadResponse(BaseModel):
+    technician_id: str
+    technician_name: str
+    tickets: List[TechnicianWorkloadItem] = []
+
+# --- Router Pipeline Schemas ---
+class CollectedFields(BaseModel):
+    problem: Optional[str] = None
+    location: Optional[str] = None
+    danger_now: Optional[bool] = None
+    preferred_date: Optional[str] = None
+    time_slot: Optional[int] = None
+    photo_received: Optional[bool] = None
+
+class BackendNotes(BaseModel):
+    needs_ticket_creation: bool = False
+    needs_assignment: bool = False
+    needs_billing_lookup: bool = False
+    needs_faq_lookup: bool = False
+
+class RouterResponse(BaseModel):
+    language: str = "ru"
+    intent: Optional[str] = None
+    requires_human: bool = False
+    cancel_requested: bool = False
+    service_category: Optional[str] = None
+    urgency: Optional[str] = None
+    collected_fields: CollectedFields = CollectedFields()
+    missing_fields: List[str] = []
+    next_step: str = "greet"
+    ready_for_confirmation: bool = False
+    ready_for_ticket: bool = False
+    notes_for_backend: BackendNotes = BackendNotes()
 
 # --- Webhook / Agent Schemas ---
 class AgentResponse(BaseModel):
