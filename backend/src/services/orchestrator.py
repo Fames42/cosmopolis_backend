@@ -293,6 +293,16 @@ def process_conversation(
     Returns:
         Tuple of (reply_text, conversation_state, agent_response_or_none).
     """
+    # ── Check if agent support is enabled for tenant ────────────────────
+    if not tenant.agent_enabled:
+        logger.info("Agent support disabled for tenant %s, skipping AI processing", tenant.id)
+        return (
+            "Автоматическая поддержка отключена для вашего аккаунта. "
+            "Пожалуйста, свяжитесь с управляющей компанией напрямую.",
+            "agent_disabled",
+            None,
+        )
+
     # ── Check escalation state ──────────────────────────────────────────
     if conv.state == ConversationStateEnum.escalated_to_human:
         if conv.escalated_at:

@@ -5,15 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .database import engine
-from .models import Base
 from .routers import users, tickets, conversations, analytics, technicians, agents, webhook
 from .auth import router as auth_router
 
 logger = logging.getLogger("uvicorn.error")
-
-# Create the database tables
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Cosmopolis Agent API")
 

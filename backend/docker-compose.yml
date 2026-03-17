@@ -30,5 +30,32 @@ services:
       db:
         condition: service_healthy
 
+  db-backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: cosmopolis
+      PGPASSWORD: ${POSTGRES_PASSWORD:-cosmopolis_dev}
+      PGDATABASE: cosmopolis
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          FILENAME="/backups/cosmopolis_$$(date +%Y-%m-%d_%H-%M-%S).sql.gz"
+          echo "[backup] $$(date) — starting dump..."
+          pg_dump | gzip > "$$FILENAME"
+          echo "[backup] saved $$FILENAME"
+          # keep only last 7 backups
+          ls -t /backups/cosmopolis_*.sql.gz 2>/dev/null | tail -n +8 | xargs -r rm
+          echo "[backup] next run in 24h"
+          sleep 86400
+        done
+
 volumes:
   pgdata:

@@ -18,7 +18,9 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
         name=user.name,
         email=user.email,
         password_hash=hashed_password,
-        role=user.role
+        role=user.role,
+        phone=user.phone or "",
+        specialties=user.specialties or [],
     )
     db.add(db_user)
     db.commit()

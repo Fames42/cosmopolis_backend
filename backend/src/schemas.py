@@ -13,11 +13,15 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
+    phone: Optional[str] = None
+    specialties: Optional[List[str]] = None
 
 class UserResponse(UserBase):
     id: str
+    phone: Optional[str] = None
+    specialties: Optional[List[str]] = None
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
@@ -91,6 +95,7 @@ class TenantBase(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    agent_enabled: bool = False
 
 class TenantCreate(TenantBase):
     building_id: int
@@ -109,6 +114,7 @@ class TenantUpdate(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    agent_enabled: Optional[bool] = None
 
 class TenantResponse(TenantBase):
     id: int

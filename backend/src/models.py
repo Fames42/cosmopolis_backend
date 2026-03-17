@@ -100,7 +100,7 @@ class Tenant(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    phone = Column(String, unique=True, index=True)
+    phone = Column(String, index=True)
     email = Column(String, nullable=True)
     building_id = Column(Integer, ForeignKey("buildings.id"), index=True)
     apartment = Column(String)
@@ -113,6 +113,7 @@ class Tenant(Base):
     parking_slot = Column(String, nullable=True)          # номер парковочного места
     emergency_contact = Column(String, nullable=True)     # контакт для экстренных случаев
     notes = Column(Text, nullable=True)                   # дополнительно (свободный текст)
+    agent_enabled = Column(Boolean, nullable=False, default=False)  # AI agent support on/off
 
     building = relationship("Building", back_populates="tenants")
     conversations = relationship("Conversation", back_populates="tenant")

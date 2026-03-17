@@ -12,8 +12,10 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY alembic.ini ./alembic.ini
 COPY src/ ./src/
 COPY rules.txt ./rules.txt
+COPY info.xlsx ./info.xlsx
 COPY prompts/ ./prompts/
 
 EXPOSE 8000

@@ -83,11 +83,15 @@ Create a new user.
   "name": "John Doe",
   "email": "john@example.com",
   "password": "secret",
-  "role": "dispatcher"
+  "role": "dispatcher",
+  "phone": "+77771234567",
+  "specialties": ["plumbing", "electrical"]
 }
 ```
 
-**Response:** `UserResponse { id, name, email, role, created_at }`
+`phone` and `specialties` are optional.
+
+**Response:** `UserResponse { id, name, email, role, phone, specialties, created_at }`
 
 ---
 
@@ -640,7 +644,8 @@ List all tenants with building info.
   "parking": true,
   "parking_slot": "A-12",
   "emergency_contact": "+77001234567",
-  "notes": "Предпочитает визиты после 14:00"
+  "notes": "Предпочитает визиты после 14:00",
+  "agent_enabled": true
 }]
 ```
 
@@ -666,11 +671,12 @@ Create a new tenant.
   "parking": true,
   "parking_slot": "B-3",
   "emergency_contact": "+77009876543",
-  "notes": null
+  "notes": null,
+  "agent_enabled": true
 }
 ```
 
-All fields except `name`, `phone`, `apartment`, `building_id` are optional.
+All fields except `name`, `phone`, `apartment`, `building_id` are optional. `agent_enabled` defaults to `true`.
 
 **Response:** `TenantListItem`
 
@@ -692,6 +698,27 @@ Update a tenant's information. All fields are optional.
   "emergency_contact": "+77001112233",
   "notes": "Свободный текст с пожеланиями"
 }
+```
+
+**Response:** `TenantListItem`
+
+---
+
+### `DELETE /api/agents/tenants/{tenant_id}`
+
+Delete a tenant.
+
+**Response:** `{ "detail": "Tenant deleted" }`
+
+---
+
+### `PATCH /api/agents/tenants/{tenant_id}/agent-support`
+
+Enable or disable AI agent support for a tenant. When disabled, the AI agent will not process messages from this tenant — they will receive a message to contact management directly.
+
+**Request body:**
+```json
+{ "enabled": false }
 ```
 
 **Response:** `TenantListItem`
@@ -725,6 +752,7 @@ Assign a tenant to a building.
 | `parking_slot`      | string  | Номер парковочного места                       |
 | `emergency_contact` | string  | Контакт для экстренных случаев                 |
 | `notes`             | string  | Дополнительно (свободный текст)                |
+| `agent_enabled`     | bool    | AI agent support on/off (default: `true`)      |
 
 ---
 

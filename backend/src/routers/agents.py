@@ -38,6 +38,7 @@ class TenantCreateRequest(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    agent_enabled: bool = True
 
 class TenantUpdateRequest(BaseModel):
     name: Optional[str] = None
@@ -53,6 +54,7 @@ class TenantUpdateRequest(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    agent_enabled: Optional[bool] = None
 
 class TenantListItem(BaseModel):
     id: int
@@ -71,6 +73,10 @@ class TenantListItem(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    agent_enabled: bool = True
+
+class TenantAgentSupportRequest(BaseModel):
+    enabled: bool
 
 class TenantAssignRequest(BaseModel):
     building_id: int
@@ -144,6 +150,7 @@ def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> 
         parking_slot=tenant.parking_slot,
         emergency_contact=tenant.emergency_contact,
         notes=tenant.notes,
+        agent_enabled=tenant.agent_enabled,
     )
 
 
@@ -199,6 +206,7 @@ def create_tenant(
         parking_slot=body.parking_slot,
         emergency_contact=body.emergency_contact,
         notes=body.notes,
+        agent_enabled=body.agent_enabled,
     )
     db.add(tenant)
     db.commit()
@@ -225,6 +233,43 @@ def update_tenant(
     for field, value in body.model_dump(exclude_unset=True).items():
         setattr(tenant, field, value)
 
+    db.commit()
+    db.refresh(tenant)
+
+    building_name = None
+    if tenant.building_id:
+        building_name = db.query(models.Building.name).filter(models.Building.id == tenant.building_id).scalar()
+
+    return _tenant_to_item(tenant, building_name)
+
+
+@router.delete("/tenants/{tenant_id}")
+def delete_tenant(
+    tenant_id: int,
+    current_user: models.User = Depends(get_agent_user),
+    db: Session = Depends(get_db),
+):
+    tenant = db.query(models.Tenant).filter(models.Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    db.delete(tenant)
+    db.commit()
+    return {"detail": "Tenant deleted"}
+
+
+@router.patch("/tenants/{tenant_id}/agent-support", response_model=TenantListItem)
+def toggle_agent_support(
+    tenant_id: int,
+    body: TenantAgentSupportRequest,
+    current_user: models.User = Depends(get_agent_user),
+    db: Session = Depends(get_db),
+):
+    tenant = db.query(models.Tenant).filter(models.Tenant.id == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    tenant.agent_enabled = body.enabled
     db.commit()
     db.refresh(tenant)
 
