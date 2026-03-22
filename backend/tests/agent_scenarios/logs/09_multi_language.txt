@@ -1,0 +1,67 @@
+SCENARIO: 09_multi_language — Multi-Language — English
+PHONE: 77001117892409
+TENANT: James Wilson (apt 415)
+EXPECTED STATES: ticket_created, closed
+STARTED: 2026-03-22 11:33:30
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Hi, my bathroom faucet is leaking and dripping constantly. Could someone please come take a look?
+AGENT: Of course — I can help with that. Since it’s the bathroom faucet, an optional photo would be helpful if it’s easy to send, but no worries if not.
+
+What day and time would be convenient for a technician to come by?
+DETAILS: scenario=service, subtype=plumbing
+TOOL: update_service_details(category=plumbing, urgency=medium, problem=Bathroom faucet is leaking and dripping constantly., location=bathroom) → ok
+---
+
+[Turn 2] STATE: service_collecting_details
+TENANT: Tomorrow morning would be great if possible. I can send a photo a bit later if needed.
+AGENT: Tomorrow works. What exact time in the morning would be best for you?
+DETAILS: scenario=service, subtype=plumbing
+---
+
+[Turn 3] STATE: service_collecting_details
+TENANT: Any time in the morning is fine for me. The first available slot works best.
+AGENT: Got it. Could you please choose a specific time in the morning, for example 9:00, 10:00, or 11:00? That way I can check the nearest available slot for you.
+DETAILS: scenario=service, subtype=plumbing
+TOOL: update_service_details(photo_received=False) → ok
+---
+
+[Turn 4] STATE: service_scheduling
+TENANT: 10:00 would be great, thanks.
+AGENT: 10:00 is not available tomorrow, but I do have these options:
+1. 12:00–13:00
+2. 16:00–17:00
+3. 16:30–17:30
+4. 17:00–18:00
+
+Please send the number that works best for you.
+DETAILS: scenario=service, subtype=plumbing
+TOOL: search_available_slots(preferred_date=2026-03-23, preferred_time=10:00) → ok
+---
+
+[Turn 5] STATE: service_ready_for_ticket
+TENANT: 1 works for me, thanks.
+AGENT: Perfect. I have your bathroom faucet leaking in the bathroom scheduled for tomorrow, 23 March, 12:00–13:00 with Almat.
+
+Can you confirm that everything is correct?
+DETAILS: scenario=service, subtype=plumbing
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 6] STATE: closed
+TENANT: Yes, that’s correct. Thank you!
+AGENT: You’re all set — your request has been created: TKT-C8A2AAAA.
+
+A technician will visit tomorrow, 23 March, between 12:00 and 13:00.
+DETAILS: scenario=service, subtype=plumbing
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:34:32
+FINAL STATE: closed
+TOTAL TURNS: 6
+DURATION: 62s
+EXPECTED STATE REACHED: YES

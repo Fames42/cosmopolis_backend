@@ -1,0 +1,20 @@
+SCENARIO: 08_escalation_request — Escalation — Demand Human
+PHONE: 77001117892408
+TENANT: Наталья Иванова (apt 501)
+EXPECTED STATES: escalated_to_human
+STARTED: 2026-03-22 11:33:16
+==================================================
+
+[Turn 1] STATE: escalated_to_human
+TENANT: Соедините меня с живым оператором или менеджером. С ботом общаться не буду.
+AGENT: Конечно, сейчас передам ваш чат живому оператору. Пожалуйста, ожидайте немного.
+DETAILS: scenario=unknown, requires_human=true
+TOOL: escalate_to_human(reason=Tenant explicitly requested a human operator/manager and does not want to communicate with the bot.) → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:33:30
+FINAL STATE: escalated_to_human
+TOTAL TURNS: 1
+DURATION: 13s
+EXPECTED STATE REACHED: YES

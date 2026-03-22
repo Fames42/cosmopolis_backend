@@ -1,6 +1,11 @@
+from io import BytesIO
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
+from openpyxl import Workbook
+from openpyxl.styles import Font
 
 from .. import models, schemas
 from ..database import get_db
@@ -70,6 +75,60 @@ def read_tickets(
 ):
     tickets = db.query(models.Ticket).offset(skip).limit(limit).all()
     return [format_ticket_list(t) for t in tickets]
+
+@router.post("/export")
+def export_tickets(
+    body: schemas.TicketExportRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    tickets = (
+        db.query(models.Ticket)
+        .filter(models.Ticket.ticket_number.in_(body.ticket_ids))
+        .all()
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Tickets"
+
+    headers = [
+        "Ticket #", "Tenant", "Building", "Apartment", "Category",
+        "Urgency", "Status", "Description", "Created", "Assigned To",
+        "Scheduled", "Notes",
+    ]
+    ws.append(headers)
+    bold = Font(bold=True)
+    for cell in ws[1]:
+        cell.font = bold
+
+    for t in tickets:
+        tenant_name = t.tenant.name if t.tenant else ""
+        building = t.tenant.building.name if t.tenant and t.tenant.building else ""
+        apartment = t.tenant.apartment if t.tenant else ""
+        assigned = t.assignee.name if t.assignee else ""
+        scheduled = t.scheduled_time.isoformat() if t.scheduled_time else ""
+        created = t.created_at.isoformat() if t.created_at else ""
+        notes_text = "\n".join(
+            f"[{n.author.name if n.author else 'Unknown'}] {n.text}"
+            for n in t.notes
+        )
+        ws.append([
+            t.ticket_number, tenant_name, building, apartment,
+            t.category or "", t.urgency or "", t.status.value if t.status else "",
+            t.description or "", created, assigned, scheduled, notes_text,
+        ])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=tickets_export.xlsx"},
+    )
+
 
 @router.get("/{ticket_id}", response_model=schemas.TicketDispatcherDetailResponse)
 def read_ticket(

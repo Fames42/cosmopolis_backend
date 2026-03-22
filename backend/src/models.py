@@ -56,6 +56,7 @@ class ConversationStateEnum(enum.Enum):
     service_ready_for_ticket = "service_ready_for_ticket"
     ticket_created = "ticket_created"
     technician_assigned = "technician_assigned"
+    managing_ticket = "managing_ticket"
     escalated_to_human = "escalated_to_human"
     closed = "closed"
 
@@ -104,8 +105,8 @@ class Tenant(Base):
     email = Column(String, nullable=True)
     building_id = Column(Integer, ForeignKey("buildings.id"), index=True)
     apartment = Column(String)
-    move_in_date = Column(String, nullable=True)          # дата заселения
-    lease_duration = Column(String, nullable=True)        # срок аренды
+    lease_start_date = Column(String, nullable=True)       # дата начала аренды
+    lease_end_date = Column(String, nullable=True)        # дата окончания аренды
     adults = Column(Integer, nullable=True)               # количество взрослых
     children = Column(Integer, nullable=True)             # количество детей
     has_pets = Column(Boolean, nullable=True)             # питомцы да/нет
@@ -113,6 +114,7 @@ class Tenant(Base):
     parking_slot = Column(String, nullable=True)          # номер парковочного места
     emergency_contact = Column(String, nullable=True)     # контакт для экстренных случаев
     notes = Column(Text, nullable=True)                   # дополнительно (свободный текст)
+    company = Column(String, nullable=True)               # компания клиента
     agent_enabled = Column(Boolean, nullable=False, default=False)  # AI agent support on/off
 
     building = relationship("Building", back_populates="tenants")

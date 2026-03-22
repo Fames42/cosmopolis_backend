@@ -20,7 +20,7 @@ URGENCY_WINDOW = {
     "low": 5,
 }
 
-SLOT_DURATION_HOURS = 2
+SLOT_DURATION_MINUTES = 60
 
 
 def _parse_time(t: str) -> time:
@@ -29,18 +29,152 @@ def _parse_time(t: str) -> time:
     return time(int(h), int(m))
 
 
-def _generate_hour_blocks(start: time, end: time) -> list[int]:
-    """Return list of start-hours for SLOT_DURATION_HOURS blocks between start and end.
+def _to_minutes(t: time) -> int:
+    """Convert time to minutes from midnight."""
+    return t.hour * 60 + t.minute
 
-    Example (2h slots): start=09:00, end=18:00 → [9, 11, 13, 15]
-    Only includes start hours where the full slot fits before end.
+
+def _generate_time_blocks(start: time, end: time) -> list[tuple[int, int]]:
+    """Return (hour, minute) tuples at 30-min intervals that fit a full slot before end.
+
+    Example (1h slots): start=09:00, end=18:00
+    → (9,0), (9,30), (10,0), ..., (17,0)
     """
-    hours = []
-    h = start.hour
-    while h + SLOT_DURATION_HOURS <= end.hour:
-        hours.append(h)
-        h += SLOT_DURATION_HOURS
-    return hours
+    blocks = []
+    start_min = _to_minutes(start)
+    end_min = _to_minutes(end)
+    cur = start_min
+    while cur + SLOT_DURATION_MINUTES <= end_min:
+        blocks.append((cur // 60, cur % 60))
+        cur += 30
+    return blocks
+
+
+def _get_occupied_ranges(
+    db: Session, tech_id: str, check_date: date, exclude_ticket_id: int | None = None,
+) -> list[tuple[int, int]]:
+    """Return list of (start_min, end_min) occupied ranges for a technician on a date."""
+    day_start = datetime(check_date.year, check_date.month, check_date.day, tzinfo=TZ_ALMATY)
+    day_end = day_start + timedelta(days=1)
+    q = (
+        db.query(models.Ticket)
+        .filter(
+            models.Ticket.assigned_to == tech_id,
+            models.Ticket.scheduled_time >= day_start,
+            models.Ticket.scheduled_time < day_end,
+            models.Ticket.status.notin_([
+                models.TicketStatusEnum.done,
+                models.TicketStatusEnum.cancelled,
+            ]),
+        )
+    )
+    if exclude_ticket_id is not None:
+        q = q.filter(models.Ticket.id != exclude_ticket_id)
+    existing = q.all()
+    ranges = []
+    for ticket in existing:
+        if ticket.scheduled_time:
+            s = ticket.scheduled_time.hour * 60 + ticket.scheduled_time.minute
+            ranges.append((s, s + SLOT_DURATION_MINUTES))
+    return ranges
+
+
+def _overlaps(start_min: int, end_min: int, occupied: list[tuple[int, int]]) -> bool:
+    """Check if [start_min, end_min) overlaps with any occupied range."""
+    for occ_start, occ_end in occupied:
+        if start_min < occ_end and end_min > occ_start:
+            return True
+    return False
+
+
+def _find_matching_techs(db: Session, category: str):
+    """Find technicians whose specialties include the given category."""
+    category_lower = category.lower()
+    all_techs = (
+        db.query(models.User)
+        .filter(models.User.role == models.RoleEnum.technician)
+        .all()
+    )
+    return [
+        tech for tech in all_techs
+        if category_lower in [s.lower() for s in (tech.specialties or [])]
+    ]
+
+
+def _load_schedule_map(
+    db: Session, tech_ids: list[str],
+) -> dict[tuple[str, int], tuple[time, time]]:
+    """Load technician schedules indexed by (tech_id, day_of_week)."""
+    schedules = (
+        db.query(models.TechnicianSchedule)
+        .filter(models.TechnicianSchedule.technician_id.in_(tech_ids))
+        .all()
+    )
+    schedule_map: dict[tuple[str, int], tuple[time, time]] = {}
+    for s in schedules:
+        schedule_map[(s.technician_id, s.day_of_week)] = (
+            _parse_time(s.start_time),
+            _parse_time(s.end_time),
+        )
+    return schedule_map
+
+
+def _make_slot_dict(tech, check_date: date, hour: int, minute: int) -> dict:
+    """Build a slot dict for a technician at a given date/time."""
+    slot_start = datetime(
+        check_date.year, check_date.month, check_date.day,
+        hour, minute, tzinfo=TZ_ALMATY,
+    )
+    slot_end = slot_start + timedelta(minutes=SLOT_DURATION_MINUTES)
+    return {
+        "technician_id": tech.id,
+        "technician_name": tech.name,
+        "start": slot_start.isoformat(),
+        "end": slot_end.isoformat(),
+    }
+
+
+def find_slot_for_time(
+    db: Session,
+    category: str,
+    target_date: date,
+    hour: int,
+    minute: int,
+    exclude_ticket_id: int | None = None,
+) -> list[dict]:
+    """Check if any technician is free at target_date hour:minute for 1h.
+
+    Returns a single-element list [slot_dict] if available, [] if not.
+    """
+    matching_techs = _find_matching_techs(db, category)
+    if not matching_techs:
+        return []
+
+    tech_ids = [t.id for t in matching_techs]
+    schedule_map = _load_schedule_map(db, tech_ids)
+    weekday = target_date.weekday()
+
+    req_start = hour * 60 + minute
+    req_end = req_start + SLOT_DURATION_MINUTES
+
+    now = datetime.now(TZ_ALMATY)
+    if target_date == now.date() and req_start <= now.hour * 60 + now.minute:
+        return []
+
+    for tech in matching_techs:
+        key = (tech.id, weekday)
+        if key not in schedule_map:
+            continue
+
+        work_start, work_end = schedule_map[key]
+        if req_start < _to_minutes(work_start) or req_end > _to_minutes(work_end):
+            continue
+
+        occupied = _get_occupied_ranges(db, tech.id, target_date, exclude_ticket_id)
+        if not _overlaps(req_start, req_end, occupied):
+            return [_make_slot_dict(tech, target_date, hour, minute)]
+
+    return []
 
 
 def find_available_slots(
@@ -57,102 +191,44 @@ def find_available_slots(
     """
     now = datetime.now(TZ_ALMATY)
     today = now.date()
+    now_min = now.hour * 60 + now.minute
     window_days = URGENCY_WINDOW.get(urgency.lower(), 3)
-    category_lower = category.lower()
 
-    # 1. Find technicians with matching specialty
-    all_techs = (
-        db.query(models.User)
-        .filter(models.User.role == models.RoleEnum.technician)
-        .all()
-    )
-    matching_techs = []
-    for tech in all_techs:
-        specs = tech.specialties or []
-        if category_lower in [s.lower() for s in specs]:
-            matching_techs.append(tech)
-
+    matching_techs = _find_matching_techs(db, category)
     if not matching_techs:
         logger.warning("No technicians found with specialty '%s'", category)
         return []
 
-    # 2. Load schedules for matching technicians
     tech_ids = [t.id for t in matching_techs]
-    schedules = (
-        db.query(models.TechnicianSchedule)
-        .filter(models.TechnicianSchedule.technician_id.in_(tech_ids))
-        .all()
-    )
-    # Index: (tech_id, day_of_week) → (start_time, end_time)
-    schedule_map: dict[tuple[str, int], tuple[time, time]] = {}
-    for s in schedules:
-        schedule_map[(s.technician_id, s.day_of_week)] = (
-            _parse_time(s.start_time),
-            _parse_time(s.end_time),
-        )
+    schedule_map = _load_schedule_map(db, tech_ids)
 
-    # 3. For each day in window, find free slots
     slots: list[dict] = []
 
     for day_offset in range(window_days):
         check_date = today + timedelta(days=day_offset)
-        weekday = check_date.weekday()  # 0=Monday
+        weekday = check_date.weekday()
 
         for tech in matching_techs:
             key = (tech.id, weekday)
             if key not in schedule_map:
-                continue  # Tech doesn't work this day
+                continue
 
             work_start, work_end = schedule_map[key]
-            all_hours = _generate_hour_blocks(work_start, work_end)
+            all_blocks = _generate_time_blocks(work_start, work_end)
+            occupied = _get_occupied_ranges(db, tech.id, check_date)
 
-            # Get existing appointments for this tech on this day
-            day_start = datetime(check_date.year, check_date.month, check_date.day, tzinfo=TZ_ALMATY)
-            day_end = day_start + timedelta(days=1)
-            existing = (
-                db.query(models.Ticket)
-                .filter(
-                    models.Ticket.assigned_to == tech.id,
-                    models.Ticket.scheduled_time >= day_start,
-                    models.Ticket.scheduled_time < day_end,
-                    models.Ticket.status.notin_([
-                        models.TicketStatusEnum.done,
-                        models.TicketStatusEnum.cancelled,
-                    ]),
-                )
-                .all()
-            )
-            occupied_hours = set()
-            for ticket in existing:
-                if ticket.scheduled_time:
-                    # Each ticket occupies SLOT_DURATION_HOURS hours
-                    for h in range(SLOT_DURATION_HOURS):
-                        occupied_hours.add(ticket.scheduled_time.hour + h)
+            for hour, minute in all_blocks:
+                slot_start_min = hour * 60 + minute
+                slot_end_min = slot_start_min + SLOT_DURATION_MINUTES
 
-            # Remove occupied hours and past hours (if today)
-            for hour in all_hours:
-                # Check that the full slot doesn't overlap with occupied hours
-                if any(hour + h in occupied_hours for h in range(SLOT_DURATION_HOURS)):
+                if _overlaps(slot_start_min, slot_end_min, occupied):
                     continue
-                # Skip past hours if checking today
-                if check_date == today and hour <= now.hour:
+                if check_date == today and slot_start_min <= now_min:
                     continue
 
-                slot_start = datetime(
-                    check_date.year, check_date.month, check_date.day,
-                    hour, 0, tzinfo=TZ_ALMATY,
-                )
-                slot_end = slot_start + timedelta(hours=SLOT_DURATION_HOURS)
-
-                slots.append({
-                    "technician_id": tech.id,
-                    "technician_name": tech.name,
-                    "start": slot_start.isoformat(),
-                    "end": slot_end.isoformat(),
-                })
+                slots.append(_make_slot_dict(tech, check_date, hour, minute))
 
                 if len(slots) >= num_slots * 3:
-                    # Enough candidates to pick from
                     break
 
             if len(slots) >= num_slots * 3:
@@ -160,11 +236,10 @@ def find_available_slots(
         if len(slots) >= num_slots * 3:
             break
 
-    # 4. Pick representative spread of slots (earliest, middle, latest if enough)
+    # Pick representative spread of slots (earliest, middle, latest if enough)
     if len(slots) <= num_slots:
         return slots
 
-    # Spread: pick first, middle, and last-ish to give variety
     step = max(1, len(slots) // num_slots)
     picked = [slots[i * step] for i in range(num_slots) if i * step < len(slots)]
     return picked[:num_slots]
@@ -174,39 +249,20 @@ def find_slots_for_date(
     db: Session,
     category: str,
     target_date: date,
+    exclude_ticket_id: int | None = None,
 ) -> list[dict]:
     """Find ALL available 1-hour slots for a specific date."""
     now = datetime.now(TZ_ALMATY)
     today = now.date()
-    category_lower = category.lower()
+    now_min = now.hour * 60 + now.minute
 
-    all_techs = (
-        db.query(models.User)
-        .filter(models.User.role == models.RoleEnum.technician)
-        .all()
-    )
-    matching_techs = [
-        tech for tech in all_techs
-        if category_lower in [s.lower() for s in (tech.specialties or [])]
-    ]
-
+    matching_techs = _find_matching_techs(db, category)
     if not matching_techs:
         logger.warning("No technicians found with specialty '%s'", category)
         return []
 
     tech_ids = [t.id for t in matching_techs]
-    schedules = (
-        db.query(models.TechnicianSchedule)
-        .filter(models.TechnicianSchedule.technician_id.in_(tech_ids))
-        .all()
-    )
-    schedule_map: dict[tuple[str, int], tuple[time, time]] = {}
-    for s in schedules:
-        schedule_map[(s.technician_id, s.day_of_week)] = (
-            _parse_time(s.start_time),
-            _parse_time(s.end_time),
-        )
-
+    schedule_map = _load_schedule_map(db, tech_ids)
     weekday = target_date.weekday()
     slots: list[dict] = []
 
@@ -216,47 +272,19 @@ def find_slots_for_date(
             continue
 
         work_start, work_end = schedule_map[key]
-        all_hours = _generate_hour_blocks(work_start, work_end)
+        all_blocks = _generate_time_blocks(work_start, work_end)
+        occupied = _get_occupied_ranges(db, tech.id, target_date, exclude_ticket_id)
 
-        day_start = datetime(target_date.year, target_date.month, target_date.day, tzinfo=TZ_ALMATY)
-        day_end = day_start + timedelta(days=1)
-        existing = (
-            db.query(models.Ticket)
-            .filter(
-                models.Ticket.assigned_to == tech.id,
-                models.Ticket.scheduled_time >= day_start,
-                models.Ticket.scheduled_time < day_end,
-                models.Ticket.status.notin_([
-                    models.TicketStatusEnum.done,
-                    models.TicketStatusEnum.cancelled,
-                ]),
-            )
-            .all()
-        )
-        occupied_hours = set()
-        for t in existing:
-            if t.scheduled_time:
-                for h in range(SLOT_DURATION_HOURS):
-                    occupied_hours.add(t.scheduled_time.hour + h)
+        for hour, minute in all_blocks:
+            slot_start_min = hour * 60 + minute
+            slot_end_min = slot_start_min + SLOT_DURATION_MINUTES
 
-        for hour in all_hours:
-            if any(hour + h in occupied_hours for h in range(SLOT_DURATION_HOURS)):
+            if _overlaps(slot_start_min, slot_end_min, occupied):
                 continue
-            if target_date == today and hour <= now.hour:
+            if target_date == today and slot_start_min <= now_min:
                 continue
 
-            slot_start = datetime(
-                target_date.year, target_date.month, target_date.day,
-                hour, 0, tzinfo=TZ_ALMATY,
-            )
-            slot_end = slot_start + timedelta(hours=SLOT_DURATION_HOURS)
-
-            slots.append({
-                "technician_id": tech.id,
-                "technician_name": tech.name,
-                "start": slot_start.isoformat(),
-                "end": slot_end.isoformat(),
-            })
+            slots.append(_make_slot_dict(tech, target_date, hour, minute))
 
     return slots
 
@@ -333,16 +361,9 @@ def create_ticket_from_context(
 def verify_slot_available(db: Session, technician_id: str, start_iso: str) -> bool:
     """Check that a slot hasn't been taken since it was offered."""
     start_dt = datetime.fromisoformat(start_iso)
-    conflict = (
-        db.query(models.Ticket)
-        .filter(
-            models.Ticket.assigned_to == technician_id,
-            models.Ticket.scheduled_time == start_dt,
-            models.Ticket.status.notin_([
-                models.TicketStatusEnum.done,
-                models.TicketStatusEnum.cancelled,
-            ]),
-        )
-        .first()
-    )
-    return conflict is None
+    start_naive = start_dt.replace(tzinfo=None)
+    check_date = start_naive.date()
+    req_start = start_naive.hour * 60 + start_naive.minute
+    req_end = req_start + SLOT_DURATION_MINUTES
+    occupied = _get_occupied_ranges(db, technician_id, check_date)
+    return not _overlaps(req_start, req_end, occupied)

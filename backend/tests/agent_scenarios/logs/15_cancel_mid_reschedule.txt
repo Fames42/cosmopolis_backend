@@ -1,0 +1,106 @@
+SCENARIO: 15_cancel_mid_reschedule — Cancel Mid-Reschedule
+PHONE: 77001117892415
+TENANT: Кирилл Лебедев (apt 302)
+EXPECTED STATES: closed
+STARTED: 2026-03-22 11:41:04
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте. Я Кирилл Лебедев, квартира 302. Кондиционер не охлаждает, дома очень жарко.
+AGENT: Здравствуйте, Кирилл. Понял, кондиционер не охлаждает, и в квартире очень жарко.
+
+Подскажите, пожалуйста, в какой комнате проблема, и на какой день и время вам удобно принять техника?
+DETAILS: scenario=service, subtype=heating
+TOOL: update_service_details(category=heating, urgency=medium, problem=Кондиционер не охлаждает, дома очень жарко, location=квартира 302) → ok
+---
+
+[Turn 2] STATE: service_collecting_details
+TENANT: В гостиной. Готов принять техника в ближайшее свободное время, хоть сегодня.
+AGENT: Спасибо. Могу подобрать ближайшее время, но мне нужен более точный ориентир — во сколько вам удобно сегодня, например 18:00 или 19:00?
+
+Если сегодня уже не получится, предложу ближайшие варианты.
+DETAILS: scenario=service, subtype=heating
+TOOL: update_service_details(location=гостиная) → ok
+---
+
+[Turn 3] STATE: service_scheduling
+TENANT: В гостиной. Сегодня смогу, лучше в 18:00.
+AGENT: На сегодня свободных визитов уже нет, к сожалению.
+
+Напишите, пожалуйста, другой удобный день и время, и я сразу проверю ближайшие варианты.
+DETAILS: scenario=service, subtype=heating
+TOOL: search_available_slots(preferred_date=2026-03-22, preferred_time=18:00) → no_slots
+---
+
+[Turn 4] STATE: service_scheduling
+TENANT: Тогда завтра вечером, пожалуйста. После 18:00 мне удобно.
+AGENT: Хорошо. Подскажите, пожалуйста, точное время после 18:00 — например, 18:30, 19:00 или 19:30?
+DETAILS: scenario=service, subtype=heating
+---
+
+[Turn 5] STATE: service_scheduling
+TENANT: 19:00 подойдет. Если есть раньше в ближайшие дни, тоже готов.
+AGENT: На завтра в 19:00 свободного визита нет.
+
+Если хотите, я могу подобрать ближайшие доступные слоты. Напишите, пожалуйста, любой удобный день, например послезавтра, и точное время — либо могу предложить ближайшие варианты на ближайшие дни.
+DETAILS: scenario=service, subtype=heating
+TOOL: update_service_details(preferred_date=2026-03-23, preferred_time=19:00) → ok
+TOOL: search_available_slots(preferred_date=2026-03-23, preferred_time=19:00) → no_slots
+---
+
+[Turn 6] STATE: service_scheduling
+TENANT: Да, предложите, пожалуйста, ближайшие варианты.
+AGENT: Ближайшие свободные варианты такие:
+
+1. 24 марта, 12:00–13:00
+2. 24 марта, 13:00–14:00
+3. 24 марта, 14:00–15:00
+
+Напишите номер удобного варианта.
+DETAILS: scenario=service, subtype=heating
+TOOL: search_available_slots() → ok
+---
+
+[Turn 7] STATE: service_ready_for_ticket
+TENANT: 1 подойдёт, спасибо.
+AGENT: Отлично. Итак: кондиционер не охлаждает, проблема в гостиной. Визит техника запланирован на 24 марта с 12:00 до 13:00, мастер Almat.
+
+Всё верно?
+DETAILS: scenario=service, subtype=heating
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 8] STATE: closed
+TENANT: Да, всё верно. Спасибо, буду ждать.
+AGENT: Спасибо, Кирилл. Заявка создана: TKT-353F2FA5.
+
+Техник Almat приедет 24 марта с 12:00 до 13:00. Хорошего дня!
+DETAILS: scenario=service, subtype=heating
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+[Turn 9] STATE: managing_ticket
+TENANT: Здравствуйте, хочу перенести запись по заявке на сломанный кондиционер.
+AGENT: Здравствуйте! Нашёл вашу активную заявку:
+TKT-353F2FA5 — кондиционер не охлаждает, сейчас визит назначен на 24 марта в 12:00.
+
+На какую дату и время вам было бы удобно перенести визит?
+DETAILS: scenario=service
+TOOL: lookup_my_tickets() → ok
+---
+
+[Turn 10] STATE: closed
+TENANT: Нет, не надо, оставьте как есть. Спасибо.
+AGENT: Хорошо, оставляем запись без изменений — 24 марта в 12:00.
+Спасибо! Если что-то понадобится, напишите.
+DETAILS: scenario=service
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:42:51
+FINAL STATE: closed
+TOTAL TURNS: 10
+DURATION: 107s
+EXPECTED STATE REACHED: YES

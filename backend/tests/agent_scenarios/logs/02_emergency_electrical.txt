@@ -1,0 +1,32 @@
+SCENARIO: 02_emergency_electrical — Emergency — Electrical
+PHONE: 77001117892402
+TENANT: Мария Соколова (apt 205)
+EXPECTED STATES: ticket_created, escalated_to_human, closed
+STARTED: 2026-03-22 11:29:43
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Срочно помогите, пожалуйста. В спальне из розетки идут искры, и пахнет горелым.
+AGENT: Мария, это аварийная ситуация. Пожалуйста, немедленно отключите электричество на щитке, не трогайте эту розетку и держитесь от неё подальше.
+
+Есть ли сейчас непосредственная опасность: огонь, дым или невозможно безопасно отключить питание? Если да — сразу скажите мне.
+DETAILS: scenario=service, subtype=electrical
+TOOL: update_service_details(category=electrical, urgency=emergency, problem=Из розетки идут искры, пахнет горелым, location=спальня) → ok
+---
+
+[Turn 2] STATE: escalated_to_human
+TENANT: Да, есть непосредственная опасность. Из розетки идут искры, пахнет горелым, я очень переживаю.
+AGENT: Мария, я уже срочно передал это диспетчеру.
+
+Если можете сделать это безопасно — отключите электричество на щитке. Не трогайте розетку, не пользуйтесь электроприборами рядом и, если появится дым или огонь, немедленно выйдите из квартиры и звоните в экстренные службы. Оператор свяжется с вами как можно скорее.
+DETAILS: scenario=service, subtype=electrical, requires_human=true
+TOOL: update_service_details(danger_now=True) → ok
+TOOL: escalate_to_human(reason=Аварийная электрическая ситуация: из розетки идут искры, запах гари, есть непосредственная опасность.) → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:30:10
+FINAL STATE: escalated_to_human
+TOTAL TURNS: 2
+DURATION: 26s
+EXPECTED STATE REACHED: YES

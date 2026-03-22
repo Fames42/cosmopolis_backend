@@ -1,0 +1,86 @@
+SCENARIO: 12_cancel_ticket — Cancel Ticket
+PHONE: 77001117892412
+TENANT: Вера Павлова (apt 133)
+EXPECTED STATES: closed
+STARTED: 2026-03-22 11:37:09
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте! В квартире 133 перестал работать свет в ванной. Когда можно прислать мастера?
+AGENT: Здравствуйте! Поможем. Уточните, пожалуйста: свет просто не включается, или были щелчки, искры, запах гари? И какое время вам удобно для визита мастера — день и точное время?
+DETAILS: scenario=service, subtype=electrical
+TOOL: update_service_details(category=electrical, urgency=medium, problem=Не работает свет в ванной, location=ванная) → ok
+---
+
+[Turn 2] STATE: service_scheduling
+TENANT: Здравствуйте. В ванной свет просто не включается, никаких щелчков, искр или запаха гари не было. Мне удобно сегодня днём, начиная с 14:00.
+AGENT: Спасибо за уточнение. На сегодня свободных визитов уже нет.
+
+Напишите, пожалуйста, какой другой день и точное время вам подойдут, и я сразу проверю доступные окна.
+DETAILS: scenario=service, subtype=electrical
+TOOL: update_service_details(category=electrical, urgency=medium, problem=Свет в ванной не включается, без щелчков, искр и запаха гари, location=ванная, danger_now=False) → ok
+TOOL: search_available_slots(preferred_date=2026-03-22, preferred_time=14:00) → no_slots
+---
+
+[Turn 3] STATE: service_scheduling
+TENANT: Тогда завтра, пожалуйста. Мне удобно в любое время после 10:00.
+AGENT: Подскажите, пожалуйста, точное время после 10:00, которое вам удобно — например 10:00, 11:30 или 14:00. Как только напишете, я сразу проверю доступность.
+DETAILS: scenario=service, subtype=electrical
+---
+
+[Turn 4] STATE: service_scheduling
+TENANT: 11:30 мне удобно.
+AGENT: На завтра в 11:30 свободного окна нет, но есть доступное время:
+
+1. 16:00–17:00 — мастер Almat
+
+Если вам подходит, просто напишите 1.
+DETAILS: scenario=service, subtype=electrical
+TOOL: update_service_details(preferred_date=2026-03-23, preferred_time=11:30) → ok
+TOOL: search_available_slots(preferred_date=2026-03-23, preferred_time=11:30) → ok
+---
+
+[Turn 5] STATE: service_ready_for_ticket
+TENANT: 1
+AGENT: Подтверждаю: проблема со светом в ванной, визит мастера Almat завтра, 23 марта, с 16:00 до 17:00.
+
+Всё верно?
+DETAILS: scenario=service, subtype=electrical
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 6] STATE: closed
+TENANT: Да, всё верно. Спасибо!
+AGENT: Спасибо! Заявка TKT-B302BF29 создана.
+
+Мастер Almat приедет завтра, 23 марта, с 16:00 до 17:00. Хорошего дня!
+DETAILS: scenario=service, subtype=electrical
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+[Turn 7] STATE: managing_ticket
+TENANT: Здравствуйте! Хочу отменить мою заявку на ремонт.
+AGENT: Здравствуйте! У вас есть активная заявка TKT-B302BF29: не включается свет в ванной, визит назначен на 23.03 в 16:00.
+
+Подтвердите, пожалуйста: точно отменяем эту заявку?
+DETAILS: scenario=service
+TOOL: lookup_my_tickets() → ok
+---
+
+[Turn 8] STATE: closed
+TENANT: Да, подтверждаю, заявку можно отменить. Муж уже всё починил, спасибо.
+AGENT: Поняла, спасибо за подтверждение. Заявка TKT-B302BF29 отменена.
+
+Рада, что всё удалось починить. Если понадобится помощь, напишите в любое время.
+DETAILS: scenario=service
+TOOL: cancel_ticket(ticket_number=TKT-B302BF29) → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:38:34
+FINAL STATE: closed
+TOTAL TURNS: 8
+DURATION: 84s
+EXPECTED STATE REACHED: YES

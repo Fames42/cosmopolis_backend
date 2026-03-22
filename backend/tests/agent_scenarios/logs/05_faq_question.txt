@@ -1,0 +1,29 @@
+SCENARIO: 05_faq_question — FAQ — Office Hours
+PHONE: 77001118021302
+TENANT: Сергей Волков (apt 403)
+EXPECTED STATES: gathering, classified_faq, escalated_to_human, closed
+STARTED: 2026-03-22 11:51:03
+==================================================
+
+[Turn 1] STATE: gathering
+TENANT: Здравствуйте! Я Сергей Волков, квартира 403. Подскажите, пожалуйста, часы работы офиса управления и какая у вас политика по гостевой парковке?
+AGENT: Здравствуйте, Сергей! Офис управления обычно работает в будние дни, но по точным часам и правилам гостевой парковки мне лучше сразу подключить оператора, чтобы не дать вам неточную информацию.
+
+Если хотите, я сейчас передам ваш вопрос сотруднику.
+---
+
+[Turn 2] STATE: escalated_to_human
+TENANT: Да, пожалуйста, передайте сотруднику. Мне нужно уточнить часы работы офиса и правила гостевой парковки.
+AGENT: Конечно, передаю ваш вопрос сотруднику сейчас.
+
+Оператор свяжется с вами, чтобы уточнить часы работы офиса и правила гостевой парковки.
+DETAILS: scenario=unknown, requires_human=true
+TOOL: escalate_to_human(reason=Tenant requests a human for office hours and guest parking policy information.) → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:51:25
+FINAL STATE: escalated_to_human
+TOTAL TURNS: 2
+DURATION: 21s
+EXPECTED STATE REACHED: YES

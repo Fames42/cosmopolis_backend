@@ -29,8 +29,8 @@ class TenantCreateRequest(BaseModel):
     apartment: str
     building_id: Optional[int] = None
     email: Optional[str] = None
-    move_in_date: Optional[str] = None
-    lease_duration: Optional[str] = None
+    lease_start_date: Optional[str] = None
+    lease_end_date: Optional[str] = None
     adults: Optional[int] = None
     children: Optional[int] = None
     has_pets: Optional[bool] = None
@@ -38,6 +38,7 @@ class TenantCreateRequest(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    company: Optional[str] = None
     agent_enabled: bool = True
 
 class TenantUpdateRequest(BaseModel):
@@ -45,8 +46,8 @@ class TenantUpdateRequest(BaseModel):
     phone: Optional[str] = None
     apartment: Optional[str] = None
     email: Optional[str] = None
-    move_in_date: Optional[str] = None
-    lease_duration: Optional[str] = None
+    lease_start_date: Optional[str] = None
+    lease_end_date: Optional[str] = None
     adults: Optional[int] = None
     children: Optional[int] = None
     has_pets: Optional[bool] = None
@@ -54,6 +55,7 @@ class TenantUpdateRequest(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    company: Optional[str] = None
     agent_enabled: Optional[bool] = None
 
 class TenantListItem(BaseModel):
@@ -64,8 +66,8 @@ class TenantListItem(BaseModel):
     building_id: Optional[int] = None
     building_name: Optional[str] = None
     email: Optional[str] = None
-    move_in_date: Optional[str] = None
-    lease_duration: Optional[str] = None
+    lease_start_date: Optional[str] = None
+    lease_end_date: Optional[str] = None
     adults: Optional[int] = None
     children: Optional[int] = None
     has_pets: Optional[bool] = None
@@ -73,6 +75,7 @@ class TenantListItem(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    company: Optional[str] = None
     agent_enabled: bool = True
 
 class TenantAgentSupportRequest(BaseModel):
@@ -141,8 +144,8 @@ def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> 
         building_id=tenant.building_id,
         building_name=building_name,
         email=tenant.email,
-        move_in_date=tenant.move_in_date,
-        lease_duration=tenant.lease_duration,
+        lease_start_date=tenant.lease_start_date,
+        lease_end_date=tenant.lease_end_date,
         adults=tenant.adults,
         children=tenant.children,
         has_pets=tenant.has_pets,
@@ -150,6 +153,7 @@ def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> 
         parking_slot=tenant.parking_slot,
         emergency_contact=tenant.emergency_contact,
         notes=tenant.notes,
+        company=tenant.company,
         agent_enabled=tenant.agent_enabled,
     )
 
@@ -197,8 +201,8 @@ def create_tenant(
         apartment=body.apartment,
         building_id=body.building_id,
         email=body.email,
-        move_in_date=body.move_in_date,
-        lease_duration=body.lease_duration,
+        lease_start_date=body.lease_start_date,
+        lease_end_date=body.lease_end_date,
         adults=body.adults,
         children=body.children,
         has_pets=body.has_pets,
@@ -206,6 +210,7 @@ def create_tenant(
         parking_slot=body.parking_slot,
         emergency_contact=body.emergency_contact,
         notes=body.notes,
+        company=body.company,
         agent_enabled=body.agent_enabled,
     )
     db.add(tenant)

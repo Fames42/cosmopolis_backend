@@ -1,0 +1,20 @@
+SCENARIO: 06_billing_inquiry — Billing Inquiry — Rent Increase
+PHONE: 77001118021303
+TENANT: Елена Морозова (apt 210)
+EXPECTED STATES: escalated_to_human, closed
+STARTED: 2026-03-22 11:51:25
+==================================================
+
+[Turn 1] STATE: escalated_to_human
+TENANT: Здравствуйте. Я Елена Морозова, кв. 210. Подскажите, пожалуйста, почему в этом месяце увеличилась аренда, и пришлите, пожалуйста, детали начисления и оплаты.
+AGENT: Здравствуйте, Елена. По вопросам аренды, начислений и оплат я сейчас передам ваш запрос оператору, чтобы вам дали точную информацию по увеличению суммы и деталям начисления. Пожалуйста, ожидайте, с вами свяжется сотрудник.
+DETAILS: scenario=unknown, requires_human=true
+TOOL: escalate_to_human(reason=Billing/payment question about increased rent and request for charge/payment details) → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:51:40
+FINAL STATE: escalated_to_human
+TOTAL TURNS: 1
+DURATION: 15s
+EXPECTED STATE REACHED: YES

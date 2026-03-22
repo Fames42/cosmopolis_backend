@@ -16,7 +16,6 @@ src/
 ├── models.py        # ORM models (User, Ticket, Building, Tenant, Conversation, Message)
 ├── schemas.py       # Pydantic request/response schemas
 ├── auth.py          # JWT creation/verification, RBAC helpers, password hashing
-├── seed_db.py       # Database seeder with test users & sample data
 ├── routers/
 │   ├── tickets.py       # Ticket CRUD, pagination, notes, filtering
 │   ├── technicians.py   # Technician management, my-tickets, status updates

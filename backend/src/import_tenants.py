@@ -13,7 +13,7 @@ from pathlib import Path
 import openpyxl
 
 from src.database import SessionLocal, engine
-from src.models import Base, Building, Tenant, User
+from src.models import Base, Building, Conversation, Message, Tenant, Ticket, TicketNote, User
 
 
 # --- Cyrillic → Latin normalization ---
@@ -168,23 +168,19 @@ def parse_xlsx(filepath: str) -> list[dict]:
         if company in ("-----", "None", ""):
             company = ""
 
-        # Build notes
-        notes_parts = []
-        if category:
-            notes_parts.append(f"Категория: {category}")
-        if company:
-            notes_parts.append(f"Компания: {company}")
-        notes = " | ".join(notes_parts) if notes_parts else ""
+        # Build notes from category only (company stored separately)
+        notes = f"Категория: {category}" if category else ""
 
         tenants.append({
             "building_name": building_name,
             "apartment": apartment,
             "name": name,
             "phone": phone,
-            "move_in_date": format_date(lease_start),
-            "lease_duration": compute_lease_duration(lease_start, lease_end),
+            "lease_start_date": format_date(lease_start),
+            "lease_end_date": format_date(lease_end),
             "emergency_contact": extra_contact if extra_contact and extra_contact != "None" else "",
             "notes": notes,
+            "company": company,
             "agent_enabled": False,
         })
 
@@ -210,52 +206,47 @@ def import_tenants():
         # Look up Zhanna as building owner
         zhanna = db.query(User).filter(User.email == "zhanna@cosmorent.kz").first()
         if not zhanna:
-            print("ERROR: User zhanna@cosmorent.kz not found. Run seed_db first.")
+            print("ERROR: User zhanna@cosmorent.kz not found. Create the user first.")
             return
         owner_id = zhanna.id
+
+        # Clear existing data (respecting FK order)
+        db.query(TicketNote).delete()
+        db.query(Ticket).delete()
+        db.query(Message).delete()
+        db.query(Conversation).delete()
+        deleted_tenants = db.query(Tenant).delete()
+        deleted_buildings = db.query(Building).delete()
+        db.flush()
+        print(f"Cleared {deleted_tenants} tenants, {deleted_buildings} buildings (and related tickets/conversations)")
 
         # Collect unique buildings
         building_names = sorted(set(r["building_name"] for r in rows))
         print(f"Found {len(building_names)} unique buildings")
 
-        # Create or find buildings
+        # Create buildings
         building_map: dict[str, int] = {}
-        buildings_created = 0
         for bname in building_names:
-            existing = db.query(Building).filter(Building.name == bname).first()
-            if existing:
-                building_map[bname] = existing.id
-            else:
-                b = Building(name=bname, address=bname, owner_id=owner_id)
-                db.add(b)
-                db.flush()
-                building_map[bname] = b.id
-                buildings_created += 1
+            b = Building(name=bname, address=bname, owner_id=owner_id)
+            db.add(b)
+            db.flush()
+            building_map[bname] = b.id
 
         # Import tenants
         tenants_created = 0
-        tenants_skipped = 0
         for r in rows:
             bid = building_map[r["building_name"]]
-
-            # Skip if tenant already exists for this building + apartment
-            existing = db.query(Tenant).filter(
-                Tenant.building_id == bid,
-                Tenant.apartment == r["apartment"],
-            ).first()
-            if existing:
-                tenants_skipped += 1
-                continue
 
             t = Tenant(
                 name=r["name"],
                 phone=r["phone"],
                 building_id=bid,
                 apartment=r["apartment"],
-                move_in_date=r["move_in_date"] or None,
-                lease_duration=r["lease_duration"] or None,
+                lease_start_date=r["lease_start_date"] or None,
+                lease_end_date=r["lease_end_date"] or None,
                 emergency_contact=r["emergency_contact"] or None,
                 notes=r["notes"] or None,
+                company=r["company"] or None,
                 agent_enabled=r["agent_enabled"],
             )
             db.add(t)
@@ -264,9 +255,8 @@ def import_tenants():
         db.commit()
 
         print(f"\n=== Import Summary ===")
-        print(f"Buildings created: {buildings_created}")
+        print(f"Buildings created: {len(building_names)}")
         print(f"Tenants imported:  {tenants_created}")
-        print(f"Tenants skipped (duplicate phone): {tenants_skipped}")
         print("Done!")
 
     finally:

@@ -86,8 +86,8 @@ class TenantBase(BaseModel):
     phone: str
     apartment: str
     email: Optional[str] = None
-    move_in_date: Optional[str] = None
-    lease_duration: Optional[str] = None
+    lease_start_date: Optional[str] = None
+    lease_end_date: Optional[str] = None
     adults: Optional[int] = None
     children: Optional[int] = None
     has_pets: Optional[bool] = None
@@ -95,6 +95,7 @@ class TenantBase(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    company: Optional[str] = None
     agent_enabled: bool = False
 
 class TenantCreate(TenantBase):
@@ -105,8 +106,8 @@ class TenantUpdate(BaseModel):
     phone: Optional[str] = None
     apartment: Optional[str] = None
     email: Optional[str] = None
-    move_in_date: Optional[str] = None
-    lease_duration: Optional[str] = None
+    lease_start_date: Optional[str] = None
+    lease_end_date: Optional[str] = None
     adults: Optional[int] = None
     children: Optional[int] = None
     has_pets: Optional[bool] = None
@@ -114,6 +115,7 @@ class TenantUpdate(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    company: Optional[str] = None
     agent_enabled: Optional[bool] = None
 
 class TenantResponse(TenantBase):
@@ -302,43 +304,14 @@ class TechnicianWorkloadResponse(BaseModel):
     technician_name: str
     tickets: List[TechnicianWorkloadItem] = []
 
-# --- Router Pipeline Schemas ---
-class CollectedFields(BaseModel):
-    problem: Optional[str] = None
-    location: Optional[str] = None
-    danger_now: Optional[bool] = None
-    preferred_date: Optional[str] = None
-    time_slot: Optional[int] = None
-    photo_received: Optional[bool] = None
+# --- Agent result schema ---
+from .agent.types import AgentResult
 
-class BackendNotes(BaseModel):
-    needs_ticket_creation: bool = False
-    needs_assignment: bool = False
-    needs_billing_lookup: bool = False
-    needs_faq_lookup: bool = False
+# Backward-compatible alias
+AgentResponse = AgentResult
 
-class RouterResponse(BaseModel):
-    language: str = "ru"
-    intent: Optional[str] = None
-    requires_human: bool = False
-    cancel_requested: bool = False
-    service_category: Optional[str] = None
-    urgency: Optional[str] = None
-    collected_fields: CollectedFields = CollectedFields()
-    missing_fields: List[str] = []
-    next_step: str = "greet"
-    ready_for_confirmation: bool = False
-    ready_for_ticket: bool = False
-    notes_for_backend: BackendNotes = BackendNotes()
-
-# --- Webhook / Agent Schemas ---
-class AgentResponse(BaseModel):
-    reply: str
-    classified: bool = False
-    scenario: Optional[str] = None
-    confidence: Optional[float] = None
-    subtype: Optional[str] = None
-    requires_human: bool = False
+class TicketExportRequest(BaseModel):
+    ticket_ids: List[str]
 
 class TestMessageRequest(BaseModel):
     phone: str

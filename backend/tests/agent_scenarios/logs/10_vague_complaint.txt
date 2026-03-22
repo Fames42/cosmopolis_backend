@@ -1,0 +1,69 @@
+SCENARIO: 10_vague_complaint — Vague Complaint — Unclear Issue
+PHONE: 77001117892410
+TENANT: Гульнара Ахметова (apt 309)
+EXPECTED STATES: service_collecting_details, ticket_created, escalated_to_human, closed
+STARTED: 2026-03-22 11:34:32
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Что-то не так в квартире. По ночам какой-то странный шум.
+AGENT: Понял(а). Подскажите, пожалуйста, откуда именно слышен шум — из стены, потолка, окна, вентиляции или, например, от какого-то прибора? И в какой комнате это происходит?
+DETAILS: scenario=service, subtype=other
+TOOL: update_service_details(category=other, urgency=low, problem=Странный шум по ночам в квартире, location=неизвестно) → ok
+---
+
+[Turn 2] STATE: service_collecting_details
+TENANT: Похоже, из стены. Больше всего слышно в ванной, ночью особенно.
+AGENT: Спасибо. Похоже, шум идёт из стены в ванной, особенно ночью.
+
+Если удобно, напишите, пожалуйста: это больше похоже на гул, стук, вибрацию или звук воды? И когда вам было бы удобно принять техника — в какой день и во сколько?
+DETAILS: scenario=service, subtype=other
+TOOL: update_service_details(problem=Странный шум из стены, особенно ночью, location=ванная) → ok
+---
+
+[Turn 3] STATE: service_collecting_details
+TENANT: Скорее как гул и иногда будто вода шумит в трубах. Удобно в любой день после 18:00.
+AGENT: Спасибо. После 18:00 я, к сожалению, не смогу проверить наличие без конкретного времени.
+
+Напишите, пожалуйста, удобный день и примерное время после 18:00, например: завтра в 18:30 или во вторник в 19:00.
+DETAILS: scenario=service, subtype=other
+---
+
+[Turn 4] STATE: service_scheduling
+TENANT: Завтра в 18:30 подойдёт. И по звуку это скорее как вода в трубах или гул в стене.
+AGENT: На завтра в 18:30 свободного окна нет, но есть варианты:
+1. 16:00–17:00
+2. 16:30–17:30
+3. 17:00–18:00
+
+Какой вариант вам подходит? Если нужно, можем посмотреть другой день.
+DETAILS: scenario=service, subtype=plumbing
+TOOL: update_service_details(category=plumbing, urgency=medium, problem=Гул в стене и шум воды в трубах по ночам, location=ванная, preferred_date=2026-03-23, preferred_time=18:30) → ok
+TOOL: search_available_slots(preferred_date=2026-03-23, preferred_time=18:30) → ok
+---
+
+[Turn 5] STATE: service_ready_for_ticket
+TENANT: 3, 17:00–18:00 подойдёт. Спасибо.
+AGENT: Отлично. Тогда записываю: шум воды/гул в стене в ванной, визит техника завтра, 23 марта, с 17:00 до 18:00. Техник: Almat.
+
+Всё верно?
+DETAILS: scenario=service, subtype=plumbing
+TOOL: select_time_slot(slot_index=2) → ok
+---
+
+[Turn 6] STATE: closed
+TENANT: Да, всё верно. Спасибо, буду дома.
+AGENT: Спасибо! Заявка создана: TKT-FC7B3DC4.
+
+Техник Almat придёт 23 марта с 17:00 до 18:00. Если что-то изменится, напишите нам снова.
+DETAILS: scenario=service, subtype=plumbing
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:35:38
+FINAL STATE: closed
+TOTAL TURNS: 6
+DURATION: 65s
+EXPECTED STATE REACHED: YES

@@ -1,0 +1,54 @@
+SCENARIO: 13_add_comment_to_ticket — Add Comment to Ticket
+PHONE: 77001117892413
+TENANT: Рустам Бекенов (apt 406)
+EXPECTED STATES: closed
+STARTED: 2026-03-22 11:38:34
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте. Я Рустам Бекенов, квартира 406. Стиральная машина не сливает воду, нужна помощь.
+AGENT: Здравствуйте, Рустам. Понял: стиральная машина не сливает воду. Подскажите, пожалуйста, где именно она находится — в ванной, прачечной или на кухне? И какой день и время вам удобны для визита техника?
+DETAILS: scenario=service, subtype=appliance
+TOOL: update_service_details(category=appliance, urgency=medium, problem=Стиральная машина не сливает воду, location=квартира 406) → ok
+---
+
+[Turn 2] STATE: service_scheduling
+TENANT: Здравствуйте. Машина в ванной. Мне удобно в ближайшее свободное время, приму первый доступный слот.
+AGENT: Ближайшее свободное время: 1) завтра, 23 марта, 16:00–17:00 2) 24 марта, 11:00–12:00 3) 24 марта, 12:30–13:30. Если подходит первый слот, просто напишите «1».
+DETAILS: scenario=service, subtype=appliance
+TOOL: update_service_details(location=ванная) → ok
+TOOL: search_available_slots() → ok
+---
+
+[Turn 3] STATE: service_ready_for_ticket
+TENANT: 1
+AGENT: Подтверждаю: стиральная машина не сливает воду, находится в ванной. Визит техника запланирован на 23 марта с 16:00 до 17:00, техник Almat. Всё верно?
+DETAILS: scenario=service, subtype=appliance
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 4] STATE: closed
+TENANT: Да, всё верно. Спасибо.
+AGENT: Спасибо. Заявка создана: TKT-C47D5D2F. Техник приедет 23 марта с 16:00 до 17:00.
+DETAILS: scenario=service, subtype=appliance
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+[Turn 5] STATE: closed
+TENANT: Хочу добавить информацию к моей существующей заявке. Стиральная машина ещё начала издавать громкий скрежет, и код от подъезда 4521.
+AGENT: Добавил информацию к вашей заявке TKT-C47D5D2F: стиральная машина издаёт громкий скрежет, код от подъезда 4521.
+
+Мастер увидит это в заявке. Если захотите ещё что-то уточнить, просто напишите.
+DETAILS: scenario=service
+TOOL: lookup_my_tickets() → ok
+TOOL: add_ticket_comment(ticket_number=TKT-C47D5D2F, comment=Дополнительная информация от жильца: стиральная машина начала издавать громкий скрежет. Код от подъезда: 4521.) → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:39:32
+FINAL STATE: closed
+TOTAL TURNS: 5
+DURATION: 58s
+EXPECTED STATE REACHED: YES

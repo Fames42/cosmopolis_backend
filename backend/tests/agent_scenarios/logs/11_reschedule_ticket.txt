@@ -1,0 +1,91 @@
+SCENARIO: 11_reschedule_ticket — Reschedule Ticket
+PHONE: 77001117892411
+TENANT: Олег Краснов (apt 220)
+EXPECTED STATES: closed
+STARTED: 2026-03-22 11:35:38
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте. В квартире 220 на кухне капает кран, не срочно, но хотелось бы починить.
+AGENT: Здравствуйте! Понял, спасибо. Это не выглядит срочным; если удобно, можете ещё прислать фото крана, но это необязательно.
+
+На какой день и время вам было бы удобно принять мастера?
+DETAILS: scenario=service, subtype=plumbing
+TOOL: update_service_details(category=plumbing, urgency=medium, problem=На кухне капает кран, location=кухня, danger_now=False) → ok
+---
+
+[Turn 2] STATE: service_scheduling
+TENANT: Можно без фото, там просто капает из кухонного крана. Мне удобно в первый ближайший свободный слот.
+AGENT: Ближайший свободный слот: 23 марта с 16:00 до 17:00. Могу записать вас на это время?
+
+Если да, просто напишите: «Да».
+DETAILS: scenario=service, subtype=plumbing
+TOOL: search_available_slots() → ok
+---
+
+[Turn 3] STATE: service_ready_for_ticket
+TENANT: Да
+AGENT: Подтверждаю: проблема — капает кухонный кран, визит мастера — 23 марта с 16:00 до 17:00, мастер Almat.
+
+Всё верно?
+DETAILS: scenario=service, subtype=plumbing
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 4] STATE: closed
+TENANT: Да, всё верно. Спасибо.
+AGENT: Спасибо! Заявка создана: TKT-F6ED6989.
+
+Мастер Almat придёт 23 марта с 16:00 до 17:00. Хорошего дня!
+DETAILS: scenario=service, subtype=plumbing
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+[Turn 5] STATE: managing_ticket
+TENANT: Мне нужно перенести время визита по заявке на капающий кран. У меня на старое время появилась встреча.
+AGENT: Конечно, помогу перенести. У вас есть активная заявка TKT-F6ED6989: на кухне капает кран, сейчас визит назначен на 23.03 в 16:00.
+
+Напишите, пожалуйста, на какой день и время вам удобно перенести визит.
+DETAILS: scenario=service
+TOOL: lookup_my_tickets() → ok
+---
+
+[Turn 6] STATE: managing_ticket
+TENANT: Нужно перенести время записи. 23.03 в 16:00 не смогу — у меня встреча.
+AGENT: Понял. На какой день и точное время вам будет удобно? Например: 24.03 в 10:30.
+DETAILS: scenario=service
+---
+
+[Turn 7] STATE: service_scheduling
+TENANT: Нужно перенести запись. Мне удобно 24.03 после обеда, например в 15:00.
+AGENT: Могу предложить 24.03 в 15:00. Подтвердить это время?
+DETAILS: scenario=service
+TOOL: search_available_slots(preferred_date=2026-03-24, preferred_time=15:00) → ok
+---
+
+[Turn 8] STATE: service_ready_for_ticket
+TENANT: Да, подтверждаю 24.03 в 15:00. Спасибо!
+AGENT: Отлично. Переношу визит по заявке TKT-F6ED6989 на 24.03 в 15:00, мастер Almat.
+
+Всё верно?
+DETAILS: scenario=service
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 9] STATE: closed
+TENANT: Да, всё верно, спасибо.
+AGENT: Готово — заявка TKT-F6ED6989 перенесена на 24.03 в 15:00. Мастер Almat приедет в это время.
+
+Спасибо, хорошего дня!
+DETAILS: scenario=service
+TOOL: reschedule_ticket(ticket_number=TKT-F6ED6989, slot_index=0) → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:37:09
+FINAL STATE: closed
+TOTAL TURNS: 9
+DURATION: 91s
+EXPECTED STATE REACHED: YES

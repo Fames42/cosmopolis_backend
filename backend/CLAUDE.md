@@ -12,7 +12,6 @@ backend/
 │   ├── models.py       # ORM models + enums
 │   ├── schemas.py      # Pydantic request/response schemas
 │   ├── auth.py         # JWT + RBAC + password hashing
-│   ├── seed_db.py      # Database seeder
 │   ├── routers/        # API route handlers
 │   └── services/       # AI agent (classifier, orchestrator)
 ├── rules.txt           # AI agent system prompt
@@ -25,7 +24,6 @@ backend/
 
 ```bash
 docker compose up --build -d                              # start
-docker compose run --rm backend python -m src.seed_db     # seed DB
 docker compose logs backend --tail 50                     # logs
 docker compose down                                       # stop
 ```
@@ -62,7 +60,6 @@ Required in `.env` (project root):
 
 ## Important Notes
 
-- Database: PostgreSQL in Docker (dev), tables auto-created on startup
-- `seed_db.py` drops and recreates all tables — only use in dev
+- Database: PostgreSQL in Docker (dev), managed via Alembic migrations
 - CORS is open (`*`) — restrict for production
 - JWT secret is hardcoded in `auth.py` — move to env var for production

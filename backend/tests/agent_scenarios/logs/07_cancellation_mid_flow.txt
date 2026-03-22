@@ -1,0 +1,37 @@
+SCENARIO: 07_cancellation_mid_flow — Cancellation Mid-Flow
+PHONE: 77001117892407
+TENANT: Алексей Дубров (apt 107)
+EXPECTED STATES: closed
+STARTED: 2026-03-22 11:32:48
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте. В квартире 107 сломалась ручка двери в ванной, болтается и почти не закрывается.
+AGENT: Здравствуйте! Понял, спасибо. Это дверь в ванной, ручка болтается и почти не закрывается.
+
+Если удобно, можете ещё отправить фото — это необязательно, но может помочь. И подскажите, пожалуйста, какой день и время вам удобны для визита мастера?
+DETAILS: scenario=service, subtype=structural
+TOOL: update_service_details(category=structural, urgency=medium, problem=Сломалась ручка двери в ванной, болтается и дверь почти не закрывается., location=ванная) → ok
+---
+
+[Turn 2] STATE: service_collecting_details
+TENANT: Да, дверь в ванной. Фото сейчас не могу отправить. Лучше завтра вечером, после 19:00.
+AGENT: Понял, спасибо. Завтра — это 2026-03-23.
+
+Подскажите, пожалуйста, точное время после 19:00, которое вам удобно, например 19:00, 19:30 или 20:00?
+DETAILS: scenario=service, subtype=structural
+---
+
+[Turn 3] STATE: closed
+TENANT: Ладно, не надо, я сам починил. Отмена.
+AGENT: Хорошо, спасибо, что сообщили. Обращайтесь, если понадобится помощь.
+DETAILS: scenario=service, subtype=structural
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:33:16
+FINAL STATE: closed
+TOTAL TURNS: 3
+DURATION: 28s
+EXPECTED STATE REACHED: YES

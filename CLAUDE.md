@@ -22,13 +22,11 @@ cosmopolis/
 ### Both services (recommended)
 ```bash
 ./start-dev.sh          # starts Docker backend + npm frontend
-./start-dev.sh --seed   # same, but seeds the DB first
 ```
 
 ### Backend only (Docker)
 ```bash
 docker compose -f backend/docker-compose.yml up --build -d
-docker compose -f backend/docker-compose.yml run --rm backend python -m src.seed_db
 ```
 
 ### Frontend only

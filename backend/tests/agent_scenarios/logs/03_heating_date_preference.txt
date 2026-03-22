@@ -1,0 +1,56 @@
+SCENARIO: 03_heating_date_preference — Heating — Date Preference
+PHONE: 77001117892403
+TENANT: Дмитрий Казаков (apt 312)
+EXPECTED STATES: ticket_created, closed
+STARTED: 2026-03-22 11:30:10
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте. Я Дмитрий Казаков, квартира 312. В гостиной перестала работать батарея, в квартире холодно.
+AGENT: Здравствуйте, Дмитрий. Понял, это срочно.
+
+Скажите, пожалуйста: сейчас есть какая-то непосредственная опасность — например, запах гари, искры, протечка или очень горячая труба? И на какой день и время вам удобно принять техника?
+DETAILS: scenario=service, subtype=heating
+TOOL: update_service_details(category=heating, urgency=high, problem=В гостиной перестала работать батарея, в квартире холодно., location=гостиная) → ok
+---
+
+[Turn 2] STATE: service_collecting_details
+TENANT: Нет, непосредственной опасности нет — просто батарея в гостиной не греет, в квартире холодно. Лучше всего в четверг, по времени могу подстроиться.
+AGENT: Спасибо, понял. Тогда подскажите, пожалуйста, какое время в четверг вам удобно — например, 10:00, 14:00 или 18:00?
+DETAILS: scenario=service, subtype=heating
+TOOL: update_service_details(danger_now=False) → ok
+---
+
+[Turn 3] STATE: service_scheduling
+TENANT: 10:00 подойдет. Если не получится в четверг, тогда ближайшее доступное время.
+AGENT: Есть свободное окно в четверг, 26 марта, с 10:00 до 11:00. Подтвердить это время?
+DETAILS: scenario=service, subtype=heating
+TOOL: update_service_details(preferred_date=2026-03-26, preferred_time=10:00) → ok
+TOOL: search_available_slots(preferred_date=2026-03-26, preferred_time=10:00) → ok
+---
+
+[Turn 4] STATE: service_ready_for_ticket
+TENANT: Да, подтверждаю. Спасибо.
+AGENT: Проблема: батарея в гостиной не греет, в квартире холодно.
+Визит назначен на четверг, 26 марта, 10:00–11:00. Техник: Almat.
+Всё верно?
+DETAILS: scenario=service, subtype=heating
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 5] STATE: closed
+TENANT: Да, всё верно. Спасибо.
+AGENT: Спасибо, Дмитрий. Заявка создана: TKT-23EF3F2B.
+
+Техник Almat приедет в четверг, 26 марта, с 10:00 до 11:00. Если понадобится, напишите нам снова.
+DETAILS: scenario=service, subtype=heating
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:31:07
+FINAL STATE: closed
+TOTAL TURNS: 5
+DURATION: 57s
+EXPECTED STATE REACHED: YES

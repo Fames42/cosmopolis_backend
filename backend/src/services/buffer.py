@@ -5,8 +5,9 @@ import logging
 from dataclasses import dataclass, field
 
 from ..database import SessionLocal
-from ..schemas import AgentResponse
-from .orchestrator import save_incoming_message, process_conversation
+from ..agent.types import AgentResult
+from ..agent.context import ConversationContext
+from .adapters import create_agent_engine
 from .notifier import send_whatsapp_reply
 
 logger = logging.getLogger("uvicorn.error")
@@ -47,7 +48,8 @@ class MessageBuffer:
         # Save to DB immediately
         db = SessionLocal()
         try:
-            tenant, conv, _ = save_incoming_message(db, phone, content, image_base64=image_base64)
+            engine = create_agent_engine(db)
+            tenant, snapshot, _ = engine.save_incoming_message(phone, content, image_base64=image_base64)
             if not tenant:
                 logger.info("Ignoring message from non-tenant %s", phone)
                 return
@@ -59,14 +61,15 @@ class MessageBuffer:
 
     async def add_message_and_wait(
         self, chat_id: str, phone: str, content: str, image_base64: str | None = None,
-    ) -> tuple[str, str, AgentResponse | None]:
+    ) -> tuple[str, str, AgentResult | None]:
         """Buffer a message and wait for the aggregated result (test endpoint)."""
         buf = self._get_buffer(chat_id)
 
         # Save to DB immediately
         db = SessionLocal()
         try:
-            tenant, conv, _ = save_incoming_message(db, phone, content, image_base64=image_base64)
+            engine = create_agent_engine(db)
+            tenant, snapshot, _ = engine.save_incoming_message(phone, content, image_base64=image_base64)
             if not tenant:
                 return (
                     "Извините, ваш номер не найден в системе. Обратитесь в управляющую компанию для регистрации.",
@@ -79,7 +82,7 @@ class MessageBuffer:
         buf.messages.append(BufferedMessage(phone=phone, content=content, image_base64=image_base64))
 
         loop = asyncio.get_running_loop()
-        future: asyncio.Future[tuple[str, str, AgentResponse | None]] = loop.create_future()
+        future: asyncio.Future[tuple[str, str, AgentResult | None]] = loop.create_future()
         buf.result_futures.append(future)
 
         await self._schedule_flush(chat_id)
@@ -87,16 +90,12 @@ class MessageBuffer:
         return await future
 
     async def _schedule_flush(self, chat_id: str) -> None:
-        """Cancel any pending timer and schedule a new flush after BUFFER_DELAY_SECONDS."""
         buf = self._get_buffer(chat_id)
-
         if buf.timer_task and not buf.timer_task.done():
             buf.timer_task.cancel()
-
         buf.timer_task = asyncio.create_task(self._delayed_flush(chat_id))
 
     async def _delayed_flush(self, chat_id: str) -> None:
-        """Wait for the buffer delay then flush."""
         try:
             await asyncio.sleep(BUFFER_DELAY_SECONDS)
             await self._flush(chat_id)
@@ -104,10 +103,8 @@ class MessageBuffer:
             pass
 
     async def _flush(self, chat_id: str) -> None:
-        """Process all buffered messages for a chat as a single aggregated request."""
         buf = self._get_buffer(chat_id)
 
-        # Wait for any in-progress processing to finish
         async with buf.processing_lock:
             messages = buf.messages[:]
             futures = buf.result_futures[:]
@@ -120,39 +117,33 @@ class MessageBuffer:
 
             phone = messages[0].phone
 
-            # Run DB operations in a thread to avoid blocking the event loop
             result = await asyncio.get_running_loop().run_in_executor(
                 None, self._process_sync, phone, chat_id,
             )
 
-            # Resolve all waiting futures
             for fut in futures:
                 if not fut.done():
                     fut.set_result(result)
 
-            # Send WhatsApp reply for greenapi messages
             reply = result[0]
             state = result[1]
-            if reply and state != "unknown_tenant":
+            if reply and state not in ("unknown_tenant", "agent_disabled"):
                 send_whatsapp_reply(chat_id, reply)
 
-        # Check if new messages arrived while we were processing
         if buf.messages:
             await self._schedule_flush(chat_id)
         else:
-            # Clean up empty buffer
             self._buffers.pop(chat_id, None)
 
     @staticmethod
     def _process_sync(
         phone: str, chat_id: str,
-    ) -> tuple[str, str, AgentResponse | None]:
-        """Synchronous DB + orchestrator processing, run in executor."""
-        from .orchestrator import _find_tenant, _get_or_create_conversation
-
+    ) -> tuple[str, str, AgentResult | None]:
+        """Synchronous processing in executor — creates isolated engine + context."""
         db = SessionLocal()
         try:
-            tenant = _find_tenant(db, phone)
+            engine = create_agent_engine(db)
+            tenant = engine.store.find_tenant_by_phone(phone)
             if not tenant:
                 return (
                     "Извините, ваш номер не найден в системе. Обратитесь в управляющую компанию для регистрации.",
@@ -160,8 +151,9 @@ class MessageBuffer:
                     None,
                 )
 
-            conv = _get_or_create_conversation(db, tenant, chat_id)
-            return process_conversation(db, conv, tenant, phone)
+            snapshot = engine.store.get_or_create_conversation(tenant.id, chat_id)
+            ctx = ConversationContext(snapshot, tenant, phone)
+            return engine.process_conversation(ctx)
         finally:
             db.close()
 

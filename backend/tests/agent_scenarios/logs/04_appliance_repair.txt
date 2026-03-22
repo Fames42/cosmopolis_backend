@@ -1,0 +1,49 @@
+SCENARIO: 04_appliance_repair — Appliance Repair — Dishwasher
+PHONE: 77001118021301
+TENANT: Аня Федорова (apt 118)
+EXPECTED STATES: ticket_created, closed
+STARTED: 2026-03-22 11:50:14
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте! Я Аня Федорова, квартира 118. Посудомойка не запускается: щёлкает, но ничего не происходит.
+AGENT: Здравствуйте, Аня! Понял: посудомойка на кухне щёлкает, но не запускается. Это не выглядит как авария, поэтому давайте подберём удобное время для визита мастера — когда вам удобно: как можно скорее, завтра или в другой день?
+DETAILS: scenario=service, subtype=appliance
+TOOL: update_service_details(category=appliance, urgency=medium, problem=Посудомоечная машина не запускается: щёлкает, но цикл не начинается., location=кухня) → ok
+---
+
+[Turn 2] STATE: service_scheduling
+TENANT: Как можно скорее, пожалуйста. Если есть свободное время сегодня или завтра, мне подойдёт.
+AGENT: Ближайшие свободные окна, к сожалению, уже на вторник, 24 марта:
+1) 13:00–14:00
+2) 14:00–15:00
+3) 16:30–17:30
+
+Напишите номер удобного варианта.
+DETAILS: scenario=service, subtype=appliance
+TOOL: search_available_slots() → ok
+---
+
+[Turn 3] STATE: service_ready_for_ticket
+TENANT: 1) 13:00–14:00, пожалуйста.
+AGENT: Отлично. Записываю: посудомоечная машина не запускается, кухня; визит мастера Almat во вторник, 24 марта, с 13:00 до 14:00.
+
+Всё верно?
+DETAILS: scenario=service, subtype=appliance
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 4] STATE: closed
+TENANT: Да, всё верно, спасибо.
+AGENT: Спасибо! Заявка создана: TKT-BB22FA0A. Мастер Almat придёт во вторник, 24 марта, с 13:00 до 14:00.
+DETAILS: scenario=service, subtype=appliance
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:51:03
+FINAL STATE: closed
+TOTAL TURNS: 4
+DURATION: 49s
+EXPECTED STATE REACHED: YES

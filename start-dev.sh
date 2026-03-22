@@ -22,11 +22,6 @@ echo "Waiting for backend..."
 until curl -sf http://localhost:8000/docs > /dev/null 2>&1; do sleep 1; done
 echo "Backend is ready."
 
-# Seed database if --seed flag is passed
-if [ "$1" = "--seed" ]; then
-    echo "Seeding database..."
-    docker compose -f backend/docker-compose.yml run --rm backend python -m src.seed_db
-fi
 
 echo "Starting frontend on http://localhost:3000 ..."
 (cd frontend && npm run dev) &

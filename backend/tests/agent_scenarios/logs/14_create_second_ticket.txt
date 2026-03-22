@@ -1,0 +1,93 @@
+SCENARIO: 14_create_second_ticket — Create Second Ticket (New Issue)
+PHONE: 77001117892414
+TENANT: Анна Сергеева (apt 515)
+EXPECTED STATES: closed
+STARTED: 2026-03-22 11:39:32
+==================================================
+
+[Turn 1] STATE: service_collecting_details
+TENANT: Здравствуйте! В квартире 515 не греет духовка на кухне. Когда можно прислать мастера?
+AGENT: Здравствуйте! Помогу.
+Подскажите, пожалуйста, на какой день и на какое время вам удобно принять мастера?
+DETAILS: scenario=service, subtype=appliance
+TOOL: update_service_details(category=appliance, urgency=medium, problem=Не греет духовка, location=кухня) → ok
+---
+
+[Turn 2] STATE: service_scheduling
+TENANT: Здравствуйте! Чем раньше, тем лучше. Могу принять мастера в ближайший свободный день, в любое время.
+AGENT: Ближайшие свободные окна есть на 24 марта:
+1. 10:00–11:00
+2. 11:30–12:30
+3. 13:00–14:00
+
+Напишите, пожалуйста, номер удобного варианта.
+DETAILS: scenario=service, subtype=appliance
+TOOL: search_available_slots() → ok
+---
+
+[Turn 3] STATE: service_ready_for_ticket
+TENANT: 1, пожалуйста.
+AGENT: Подтверждаю:
+Проблема: не греет духовка
+Визит мастера: 24 марта, 10:00–11:00
+Мастер: Almat
+
+Всё верно?
+DETAILS: scenario=service, subtype=appliance
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 4] STATE: closed
+TENANT: Да, всё верно, подтверждаю. Спасибо!
+AGENT: Спасибо! Заявка создана: TKT-D2C1CB54.
+Мастер Almat придёт 24 марта с 10:00 до 11:00.
+
+Хорошего дня!
+DETAILS: scenario=service, subtype=appliance
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+[Turn 5] STATE: service_collecting_details
+TENANT: Это новая проблема. В ванной сломалась ручка двери, она не закрывается.
+AGENT: Понял(а), спасибо. Зафиксировал(а): в ванной сломалась дверная ручка, дверь не закрывается.
+
+Когда вам удобно принять мастера? Напишите, пожалуйста, день и точное время.
+DETAILS: scenario=service, subtype=structural
+TOOL: update_service_details(category=structural, urgency=low, problem=Сломалась ручка двери в ванной, дверь не закрывается., location=ванная) → ok
+---
+
+[Turn 6] STATE: service_scheduling
+TENANT: Это новая проблема, не связанная с прошлой заявкой. Мне удобно в ближайший доступный слот.
+AGENT: Ближайший доступный визит: 24 марта с 11:00 до 12:00. Мастер: Almat.
+
+Подтвердить этот слот? Если хотите, могу предложить и другие варианты: 1) 12:30–13:30, 2) 14:00–15:00.
+DETAILS: scenario=service, subtype=structural
+TOOL: search_available_slots() → ok
+---
+
+[Turn 7] STATE: service_ready_for_ticket
+TENANT: Да, подтверждаю 24 марта с 11:00 до 12:00. Спасибо.
+AGENT: Подтверждаю: сломана ручка двери в ванной, визит мастера назначен на 24 марта с 11:00 до 12:00, мастер Almat.
+
+Всё верно?
+DETAILS: scenario=service, subtype=structural
+TOOL: select_time_slot(slot_index=0) → ok
+---
+
+[Turn 8] STATE: closed
+TENANT: Да, всё верно. Спасибо!
+AGENT: Спасибо! Заявка создана: TKT-8DBE80D2.
+
+Мастер Almat придёт 24 марта с 11:00 до 12:00. Хорошего дня!
+DETAILS: scenario=service, subtype=structural
+TOOL: create_ticket() → ok
+TOOL: close_conversation() → ok
+---
+
+==================================================
+FINISHED: 2026-03-22 11:41:04
+FINAL STATE: closed
+TOTAL TURNS: 8
+DURATION: 91s
+EXPECTED STATE REACHED: YES
