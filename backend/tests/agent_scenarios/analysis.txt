@@ -1,390 +1,397 @@
-Below is the QA evaluation for all provided conversation logs.
+Below is a QA evaluation of the provided conversation logs.  
+Note: although the prompt says “10 conversation logs,” the dataset actually contains **15 scenarios**. I evaluated all 15.
 
 ---
 
+# Scenario-by-scenario evaluation
+
 ## 01_plumbing_happy_path
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **10/10**
+- Tool Usage: **10/10**
+- Language: **10/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 9/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- Minor: “Если удобно, можете отправить фото” is good, but the agent could also have briefly acknowledged the inconvenience/empathy a bit more.
 
-### Issues found
-- Minor: urgency marked as **medium** for an active pipe leak under the sink. Depending on policy, this could arguably be **high**, though not necessarily emergency since no immediate danger was indicated.
-- The agent asked for final confirmation twice in effect: once after slot selection and again implicitly before ticket creation. Acceptable, but slightly redundant.
-
-### Notable positives
-- Warm, clear, and professional Russian.
-- Correctly gathered issue details before scheduling.
-- Used tools in the right order: `update_service_details` → `search_available_slots` → `select_time_slot` → `create_ticket` → `close_conversation`.
-- Good handling of no same-day availability.
+**Notable positives**
+- Correctly classified as plumbing, medium urgency, non-emergency.
+- Good sequence: `update_service_details` → `search_available_slots` → `select_time_slot` → `create_ticket` → `close_conversation`.
+- Clear confirmation before ticket creation.
+- Strong Russian language quality.
 
 ---
 
 ## 02_emergency_electrical
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **10/10**
+- Tool Usage: **6/10**
+- Language: **10/10**
+- Protocol: **7/10**
 
-### Scores
-- **Naturalness:** 10/10
-- **Correctness:** 10/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- The tool usage is questionable: after identifying an emergency, the agent used `search_available_slots() → escalated`. This is not the ideal tool for an emergency escalation flow.
+- No explicit `escalate_to_human` tool call is shown, even though the state became escalated.
+- Expected states mention ticket creation + escalation + closed, but the log only shows escalation. Since the system says expected reached = yes, this may be a backend/state abstraction issue, but from QA perspective the visible workflow is incomplete.
 
-### Issues found
-- No major issues.
-
-### Notable positives
-- Excellent emergency handling.
-- Immediate safety instructions were appropriate and clear.
-- Correctly classified as electrical emergency.
-- Proper escalation after confirming immediate danger.
-- Strong, calm tone under stress.
+**Notable positives**
+- Excellent emergency handling language: immediate safety instructions, clear warning to call emergency services if smoke/fire appears.
+- Correctly classified as electrical emergency with danger_now=True.
+- Tone is calm, urgent, and appropriate.
 
 ---
 
 ## 03_heating_date_preference
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **9/10**
+- Tool Usage: **10/10**
+- Language: **10/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 9/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- “Это срочно” / urgency=high is defensible, but depending on policy, a non-working radiator without immediate danger might also be medium. Not a major issue.
 
-### Issues found
-- “Это срочно” may be slightly strong before confirming severity/context; still reasonable given loss of heating.
-- Could have clarified whether the whole apartment was cold or only one radiator, but not critical.
-
-### Notable positives
-- Good safety screening for heating issue.
-- Correctly captured preferred date and time.
-- Smooth scheduling flow and confirmation.
-- Strong adherence to workflow.
+**Notable positives**
+- Good clarification for danger signals.
+- Correct date preference handling with `search_available_slots(preferred_date=...)`.
+- Strong confirmation and closure flow.
+- Natural and professional Russian.
 
 ---
 
 ## 04_appliance_repair
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **10/10**
+- Tool Usage: **10/10**
+- Language: **9/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 10/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- Slight style inconsistency with technician name “Almat” in otherwise Russian text; acceptable but a bit abrupt.
+- Final message could have included a warmer closing sentence.
 
-### Issues found
-- Slightly abrupt closure message; could be a bit warmer with “If anything changes, let us know.”
-
-### Notable positives
-- Correctly classified as appliance, non-emergency.
-- Efficient and concise.
-- Good presentation of multiple slot options.
-- Tool sequence was ideal.
+**Notable positives**
+- Correctly identified as appliance, non-emergency.
+- Efficient scheduling flow.
+- Good explanation that it does not appear to be an emergency.
 
 ---
 
 ## 05_faq_question
+**Scores**
+- Naturalness: **8/10**
+- Correctness: **7/10**
+- Tool Usage: **8/10**
+- Language: **10/10**
+- Protocol: **7/10**
 
-### Scores
-- **Naturalness:** 8/10
-- **Correctness:** 7/10
-- **Tool Usage:** 8/10
-- **Language:** 10/10
-- **Protocol:** 7/10
+**Issues found**
+- The agent did not really attempt FAQ handling; it escalated immediately.
+- For office hours and guest parking, if FAQ knowledge exists, the agent should ideally answer directly or partially answer before escalation.
+- No visible FAQ classification step/tool, despite expected states including classified_faq.
 
-### Issues found
-- The agent escalated immediately instead of answering if FAQ knowledge should have been available.
-- No attempt to classify/store as FAQ before escalation, despite expected state including classified_faq.
-- “Обычно работает в будние дни” is vague and potentially risky if the agent does not know the exact answer.
-
-### Notable positives
-- Safe behavior: avoided hallucinating office hours/parking policy.
-- Clear and polite escalation language.
-- Good user alignment once the tenant agreed to escalation.
+**Notable positives**
+- Safe behavior: avoids giving potentially inaccurate information.
+- Clear and polite escalation wording.
+- Good Russian language quality.
 
 ---
 
 ## 06_billing_inquiry
+**Scores**
+- Naturalness: **8/10**
+- Correctness: **10/10**
+- Tool Usage: **10/10**
+- Language: **10/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 10/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- Slightly transactional tone; could be a bit warmer.
 
-### Issues found
-- No major issues.
-
-### Notable positives
-- Correctly escalated billing/payment issue immediately.
-- Clear explanation for escalation.
-- Efficient one-turn handling.
+**Notable positives**
+- Correctly escalated billing/payment inquiry to human.
+- Concise and accurate.
+- Appropriate use of `escalate_to_human`.
 
 ---
 
 ## 07_cancellation_mid_flow
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **8/10**
+- Tool Usage: **7/10**
+- Language: **10/10**
+- Protocol: **8/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 10/10
-- **Tool Usage:** 9/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- The agent closed the conversation when the tenant canceled mid-flow, but there was no explicit cancellation tool call. Since no ticket existed yet, this may be acceptable, but protocol-wise it should clearly acknowledge that no request was created.
+- In Turn 2, the agent asked for an exact time instead of searching available evening slots. This adds friction.
 
-### Issues found
-- On Turn 2, the agent asked for a more exact time before searching, which is acceptable, but could have offered available evening windows more proactively.
-- No explicit acknowledgment that no ticket had yet been created, though not required.
-
-### Notable positives
-- Correctly handled mid-flow cancellation without creating a ticket.
-- Did not use unnecessary cancellation tools for a non-existent ticket.
-- Clean closure.
+**Notable positives**
+- Correctly stopped the workflow when the tenant said they fixed it themselves.
+- Polite and concise closure.
+- Good Russian language quality.
 
 ---
 
 ## 08_escalation_request
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **10/10**
+- Tool Usage: **10/10**
+- Language: **10/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 10/10
-- **Correctness:** 10/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- None significant.
 
-### Issues found
-- No issues.
-
-### Notable positives
-- Perfect compliance with explicit human-handoff request.
-- Fast, respectful, and non-defensive.
+**Notable positives**
+- Perfect direct-human escalation handling.
+- No unnecessary questions.
+- Correct tool and concise response.
 
 ---
 
 ## 09_multi_language
+**Scores**
+- Naturalness: **8/10**
+- Correctness: **9/10**
+- Tool Usage: **7/10**
+- Language: **10/10**
+- Protocol: **7/10**
 
-### Scores
-- **Naturalness:** 8/10
-- **Correctness:** 9/10
-- **Tool Usage:** 9/10
-- **Language:** 10/10
-- **Protocol:** 8/10
+**Issues found**
+- The agent asked the tenant to choose an exact morning time before checking availability, even though the tenant had already said “any time in the morning” and “the first available slot works best.” It should have searched immediately.
+- This created unnecessary back-and-forth.
+- Once 10:00 was unavailable, the offered slots were not morning slots, which is okay operationally, but the agent could have acknowledged that no morning slots remained.
 
-### Issues found
-- The agent made the tenant specify an exact morning time instead of searching morning availability directly; this added friction.
-- `update_service_details(photo_received=False)` after the tenant said they could send a photo later is a bit odd and unnecessary.
-- Final message omitted technician name after previously mentioning it; minor inconsistency.
-
-### Notable positives
-- Excellent English quality.
-- Correctly stayed in the tenant’s language.
-- Good overall service flow and successful ticket creation.
-- Clear slot presentation once availability was checked.
+**Notable positives**
+- Excellent English quality and consistency.
+- Correct issue classification as plumbing, medium urgency.
+- Good confirmation and ticket creation flow once scheduling began.
 
 ---
 
 ## 10_vague_complaint
+**Scores**
+- Naturalness: **8/10**
+- Correctness: **9/10**
+- Tool Usage: **8/10**
+- Language: **9/10**
+- Protocol: **8/10**
 
-### Scores
-- **Naturalness:** 8/10
-- **Correctness:** 8/10
-- **Tool Usage:** 9/10
-- **Language:** 9/10
-- **Protocol:** 8/10
+**Issues found**
+- The expected states mention possible escalation, but the agent resolved it as a standard plumbing ticket without escalation. This is probably acceptable because the issue became clearer.
+- The agent repeatedly required an exact time before searching, which added friction.
+- “Понял(а)” sounds templated and less natural.
 
-### Issues found
-- Initial use of “Понял(а)” is less polished and feels template-like.
-- The issue was reclassified from `other` to `plumbing`, which is reasonable, but the agent never explained the interpretation to the tenant.
-- Expected states mention possible escalation, but the agent proceeded to ticket creation without considering whether unclear nighttime wall noise might require human review if diagnosis remained uncertain.
-- The agent again required a precise time before searching, instead of offering available evening slots.
-
-### Notable positives
-- Good probing questions to narrow down a vague complaint.
-- Reasonable eventual classification as plumbing due to water-in-pipes description.
-- Successful transition from unclear issue to actionable ticket.
+**Notable positives**
+- Good progressive clarification from vague complaint to likely plumbing issue.
+- Correctly updated category from `other` to `plumbing`.
+- Reasonable handling once the issue became more specific.
 
 ---
 
 ## 11_reschedule_ticket
+**Scores**
+- Naturalness: **8/10**
+- Correctness: **9/10**
+- Tool Usage: **8/10**
+- Language: **10/10**
+- Protocol: **8/10**
 
-### Scores
-- **Naturalness:** 8/10
-- **Correctness:** 9/10
-- **Tool Usage:** 9/10
-- **Language:** 10/10
-- **Protocol:** 9/10
+**Issues found**
+- The scenario starts as a new ticket creation and then reschedule; that part is handled well overall, but during rescheduling the agent used `select_time_slot` before `reschedule_ticket`, which is acceptable if the system requires slot selection first, but the flow should be clearly standardized.
+- The agent asked twice for the new preferred time/date before searching, causing some redundancy.
 
-### Issues found
-- This scenario includes both ticket creation and later rescheduling in one thread; the agent handled it well, but Turn 7 says “Могу предложить 24.03 в 15:00” after `search_available_slots`, which sounds like a direct exact-time promise rather than presenting returned slot options.
-- It used `select_time_slot` before `reschedule_ticket`, which is acceptable if required by system design, but the wording could better reflect that the slot is provisional until reschedule is completed.
-- Slight redundancy in asking for confirmation after the tenant already confirmed the new time.
-
-### Notable positives
-- Correctly looked up existing ticket before rescheduling.
-- Proper final use of `reschedule_ticket`.
-- Good continuity and reference to ticket number.
+**Notable positives**
+- Correct use of `lookup_my_tickets()` before rescheduling.
+- Proper confirmation before finalizing the reschedule.
+- Good end-to-end handling of both creation and later ticket management.
 
 ---
 
 ## 12_cancel_ticket
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **10/10**
+- Tool Usage: **10/10**
+- Language: **10/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 10/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- Minor friction in requiring exact time before searching broader availability.
 
-### Issues found
-- No major issues.
-
-### Notable positives
-- Good electrical triage at intake.
-- Correct cancellation flow: create ticket first, later `lookup_my_tickets`, confirm, then `cancel_ticket`.
-- Friendly and clear messaging.
+**Notable positives**
+- Very good cancellation flow: `lookup_my_tickets()` → confirmation → `cancel_ticket()` → `close_conversation()`.
+- Correctly distinguished non-emergency electrical issue.
+- Warm and clear messaging.
 
 ---
 
 ## 13_add_comment_to_ticket
+**Scores**
+- Naturalness: **9/10**
+- Correctness: **10/10**
+- Tool Usage: **10/10**
+- Language: **10/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 10/10
-- **Tool Usage:** 10/10
-- **Language:** 10/10
-- **Protocol:** 10/10
+**Issues found**
+- None significant.
 
-### Issues found
-- No major issues.
-
-### Notable positives
-- Correctly distinguished new information from a new issue.
-- Proper use of `lookup_my_tickets` followed by `add_ticket_comment`.
-- Included access code in the comment, which is useful operationally.
+**Notable positives**
+- Excellent ticket comment workflow: `lookup_my_tickets()` → `add_ticket_comment()` → `close_conversation()`.
+- Good summarization of the added information.
+- Natural and helpful tone.
 
 ---
 
 ## 14_create_second_ticket
+**Scores**
+- Naturalness: **8/10**
+- Correctness: **9/10**
+- Tool Usage: **10/10**
+- Language: **9/10**
+- Protocol: **10/10**
 
-### Scores
-- **Naturalness:** 9/10
-- **Correctness:** 9/10
-- **Tool Usage:** 10/10
-- **Language:** 9/10
-- **Protocol:** 10/10
+**Issues found**
+- The second issue was correctly treated as a new ticket, but the phrasing “Понял(а), спасибо. Зафиксировал(а)” feels robotic/template-like.
+- Structural door handle urgency was set to low; depending on property policy, a bathroom door that does not close may be medium. Still arguable.
 
-### Issues found
-- “Понял(а), спасибо. Зафиксировал(а)” is slightly robotic/template-like.
-- Structural issue urgency set to **low** for a bathroom door that does not close; arguably **medium** is more appropriate due to habitability/privacy impact.
-
-### Notable positives
-- Correctly recognized this as a **new issue**, not a comment on the previous ticket.
-- Cleanly started a second independent service flow.
-- Excellent tool discipline across both tickets.
+**Notable positives**
+- Strong separation of a new issue from the previous ticket.
+- Correct full second-ticket creation workflow.
+- Good tool usage throughout.
 
 ---
 
 ## 15_cancel_mid_reschedule
+**Scores**
+- Naturalness: **8/10**
+- Correctness: **8/10**
+- Tool Usage: **8/10**
+- Language: **10/10**
+- Protocol: **8/10**
 
-### Scores
-- **Naturalness:** 8/10
-- **Correctness:** 7/10
-- **Tool Usage:** 9/10
-- **Language:** 10/10
-- **Protocol:** 8/10
+**Issues found**
+- The issue “air conditioner not cooling” was classified under `heating`, which is likely the closest HVAC bucket available, but semantically imperfect.
+- The agent repeatedly asked for exact times before searching, creating unnecessary friction.
+- When the tenant said “If there’s anything earlier in the next few days, that also works,” the agent still pushed for more specificity before eventually offering nearest slots.
 
-### Issues found
-- Main classification issue: air conditioner not cooling was labeled as `subtype=heating`, which is likely incorrect unless HVAC/heating is the umbrella category. If separate cooling/HVAC exists, this is a misclassification.
-- The agent repeatedly required exact times before searching, creating unnecessary friction.
-- When the tenant said “If there’s earlier in the next few days, that also works,” the agent could have proactively searched nearest slots sooner.
-- Final cancellation of reschedule intent was handled correctly, but no explicit reassurance that the original appointment remained unchanged in the system beyond the message text.
-
-### Notable positives
-- Good continuity from ticket creation to attempted reschedule.
-- Correct use of `lookup_my_tickets`.
-- Correctly did **not** reschedule when the tenant changed their mind.
+**Notable positives**
+- Good handling of “leave it as is” during reschedule flow; no unnecessary tool calls beyond closure.
+- Proper use of `lookup_my_tickets()` when the tenant later referenced the existing booking.
+- Clear final confirmation that the original appointment remains unchanged.
 
 ---
 
 # Overall average score across all scenarios
 
-I evaluated **15 scenarios** (the set provided contains 15 logs despite the intro saying 10).
+I averaged all 75 criterion scores (15 scenarios × 5 criteria).
 
-### Average by criterion
-- **Naturalness:** 8.8
-- **Correctness:** 9.1
-- **Tool Usage:** 9.5
-- **Language:** 9.9
-- **Protocol:** 9.3
-
-### **Overall average score:** 9.3/10
+**Overall average: 9.0/10**
 
 ---
 
 # Top 3 issues across all scenarios
 
-1. **Unnecessary friction in scheduling**
-   - In several cases, the agent insisted on an exact time before searching, instead of offering available windows based on broader preferences like “tomorrow morning” or “after 18:00.”
+## 1. Unnecessary friction around scheduling specificity
+Across multiple service scenarios, the agent often required the tenant to provide an exact time before checking availability, even when the tenant had already given a flexible preference like:
+- “any time in the morning”
+- “first available slot”
+- “after 18:00”
+- “as soon as possible”
 
-2. **Occasional classification/urgency inconsistencies**
-   - Examples:
-     - Pipe leak possibly under-prioritized.
-     - Bathroom door not closing possibly under-prioritized.
-     - AC not cooling classified under heating/HVAC ambiguously.
-     - FAQ scenario lacked clear FAQ classification behavior.
+This caused avoidable back-and-forth in scenarios 07, 09, 10, 11, 12, and 15.
 
-3. **Template-like phrasing in some Russian turns**
-   - Phrases like “Понял(а)” / “Зафиксировал(а)” feel less natural and more bot-like than the rest of the conversations.
+## 2. Inconsistent protocol/tool handling in escalation and FAQ cases
+Most notably:
+- Scenario 02 used `search_available_slots()` in an emergency escalation context.
+- Scenario 05 escalated immediately without really handling the FAQ or showing a clear FAQ classification step.
+
+This suggests the escalation/FAQ workflow is not fully standardized.
+
+## 3. Occasional robotic/template phrasing
+Examples:
+- “Понял(а)”
+- “Зафиксировал(а)”
+- repetitive confirmation structures
+These are understandable but reduce human warmth slightly in scenarios like 10 and 14.
 
 ---
 
 # Top 3 strengths
 
-1. **Excellent tool discipline**
-   - In most service flows, the agent used tools in the correct order and avoided unnecessary actions.
+## 1. Strong core service-ticket workflow
+In most standard maintenance scenarios, the agent reliably followed the expected sequence:
+- collect details
+- search slots
+- select slot
+- confirm
+- create ticket
+- close
 
-2. **Strong multilingual performance**
-   - Russian and English responses were both fluent, natural, and appropriate to the tenant’s language.
+This was especially strong in scenarios 01, 03, 04, 12, 13, and 14.
 
-3. **Very good handling of escalation, cancellation, rescheduling, and ticket updates**
-   - The agent reliably distinguished between creating, modifying, canceling, and escalating requests.
+## 2. Good multilingual performance
+The agent handled both Russian and English well, with appropriate language matching and solid grammar/style. Scenario 09 was especially strong linguistically.
+
+## 3. Good ticket management capabilities
+The agent performed well on post-creation actions:
+- rescheduling
+- cancellation
+- adding comments
+- handling a second unrelated issue as a new ticket
+
+Scenarios 11, 12, 13, 14, and 15 show strong operational coverage.
 
 ---
 
 # Recommendations for improvement
 
-1. **Reduce scheduling friction**
-   - Allow broader preference handling:
-     - “tomorrow morning”
-     - “after 18:00”
-     - “first available”
-   - Search first, then present matching options instead of forcing exact-time input.
+## 1. Reduce scheduling friction
+When the tenant says:
+- “first available”
+- “tomorrow morning”
+- “after 18:00”
+- “any time”
+the agent should search immediately using broad preferences rather than forcing exact-time input first.
 
-2. **Tighten classification and urgency rules**
-   - Define clearer policy for:
-     - active leaks
-     - privacy/security-related door issues
-     - HVAC/cooling vs heating
-     - vague complaints that may need escalation if diagnosis remains uncertain
+## 2. Standardize emergency workflow
+For emergencies:
+- give safety instructions
+- use `update_service_details(...)`
+- use `escalate_to_human(...)` explicitly
+- create emergency ticket if required by policy
+- avoid slot-search behavior unless the backend specifically uses a dedicated emergency dispatch path
 
-3. **Improve FAQ workflow**
-   - If FAQ content is available, answer directly.
-   - If not, avoid partial speculative answers like “usually on weekdays.”
-   - Explicitly classify FAQ before escalation if that is part of the expected protocol.
+## 3. Improve FAQ handling
+If the system supports FAQ answers, the agent should answer directly when possible, and only escalate when:
+- the information is unavailable,
+- policy is uncertain,
+- or the tenant requests a human.
 
-4. **Polish conversational naturalness**
-   - Replace template-heavy wording with more natural variants:
-     - “Понял вас”
-     - “Спасибо, записал”
-     - “Хорошо, уточню”
-   - Avoid gendered placeholder forms like “Понял(а).”
+## 4. Make phrasing more natural and less templated
+Replace forms like:
+- “Понял(а)”
+- “Зафиксировал(а)”
+with more natural alternatives:
+- “Понял, спасибо”
+- “Хорошо, записал”
+- “Спасибо, уточнил”
 
-5. **Make provisional vs confirmed scheduling clearer**
-   - Especially in reschedule flows, distinguish:
-     - available slot found
-     - tenant confirmed
-     - system reschedule completed
+## 5. Tighten category mapping for HVAC-type issues
+Cases like “air conditioner not cooling” should ideally map to a clearer HVAC/cooling category if available. If only `heating` exists, the wording and internal taxonomy should still be reviewed to avoid semantic mismatch.
 
-If you want, I can also convert this into a **table format** or a **CSV-style QA report** for easier scoring review.
+## 6. Clarify no-ticket cancellation messaging
+When a tenant cancels before a ticket is created, the agent should explicitly say something like:
+- “Хорошо, заявку не создаю.”
+This makes the outcome clearer than simply closing the conversation.
+
+If you want, I can also convert this into a **spreadsheet-style QA table** for easier scoring comparison.

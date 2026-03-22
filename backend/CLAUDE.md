@@ -12,10 +12,14 @@ backend/
 │   ├── models.py       # ORM models + enums
 │   ├── schemas.py      # Pydantic request/response schemas
 │   ├── auth.py         # JWT + RBAC + password hashing
+│   ├── agent/          # Agentic LLM engine (tool-calling loop)
 │   ├── routers/        # API route handlers
-│   └── services/       # AI agent (classifier, orchestrator)
-├── rules.txt           # AI agent system prompt
-├── requirements.txt
+│   ├── services/       # Business logic, scheduling, notifications
+│   └── alembic/        # Database migrations
+├── prompts/            # LLM prompt templates (agent, escalation, assignment)
+├── tests/              # Integration & scenario tests
+├── backups/            # Automated daily DB snapshots (.sql.gz)
+├── analytics/          # WhatsApp data extraction scripts
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -39,17 +43,20 @@ docker compose down                                       # stop
 
 - **Module path**: `src.*` (not `backend.*`) — the Dockerfile copies `src/` into `/app/src/`
 - **Roles**: admin, owner, dispatcher, technician, agent — `RoleEnum` in models.py
+- **Technicians**: universal masters — no specialization filtering
 - **Ticket statuses**: new → assigned → scheduled → done | cancelled
-- **Conversation states**: new_conversation → gathering → classified_* → ... → closed
+- **Conversation states**: new_conversation → gathering → classified_* → ... → managing_ticket → closed
 - **AI scenarios**: service, faq, billing, announcement, unknown
 - **Ports**: API on 8000, PostgreSQL on 5433 (host) / 5432 (container)
+- **Timezone**: UTC+5 (Almaty/Astana) for all scheduling
 
 ## AI Agent
 
-- **System prompt**: `rules.txt` — loaded at startup, cached
-- **LLM**: GPT-5.4 via OpenAI API (`OPENAI_TOKEN` env var)
-- **Classifier** (`services/classifier.py`): sends conversation history + instruction → returns reply + classification JSON
-- **Orchestrator** (`services/orchestrator.py`): state machine — manages conversation lifecycle, calls classifier
+- **Engine**: `src/agent/engine.py` — agentic loop using OpenAI Responses API with tool calls
+- **LLM client**: `src/agent/llm.py` — GPT-5.4 via OpenAI API, defines 10 tools
+- **System prompt**: `prompts/agent.txt` — loaded at startup, cached
+- **Orchestrator** (`services/orchestrator.py`): thin shim delegating to `AgentEngine`
+- **Adapters** (`services/adapters.py`): bridges SQLAlchemy ORM to agent protocol interfaces
 - **Test endpoint**: `POST /api/webhook/test` with `{"phone": "...", "message": "..."}`
 
 ## Environment Variables

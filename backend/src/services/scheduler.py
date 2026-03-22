@@ -87,18 +87,13 @@ def _overlaps(start_min: int, end_min: int, occupied: list[tuple[int, int]]) -> 
     return False
 
 
-def _find_matching_techs(db: Session, category: str):
-    """Find technicians whose specialties include the given category."""
-    category_lower = category.lower()
-    all_techs = (
+def _find_all_techs(db: Session):
+    """Return all technicians (universal masters — no specialization filtering)."""
+    return (
         db.query(models.User)
         .filter(models.User.role == models.RoleEnum.technician)
         .all()
     )
-    return [
-        tech for tech in all_techs
-        if category_lower in [s.lower() for s in (tech.specialties or [])]
-    ]
 
 
 def _load_schedule_map(
@@ -146,7 +141,7 @@ def find_slot_for_time(
 
     Returns a single-element list [slot_dict] if available, [] if not.
     """
-    matching_techs = _find_matching_techs(db, category)
+    matching_techs = _find_all_techs(db)
     if not matching_techs:
         return []
 
@@ -194,9 +189,9 @@ def find_available_slots(
     now_min = now.hour * 60 + now.minute
     window_days = URGENCY_WINDOW.get(urgency.lower(), 3)
 
-    matching_techs = _find_matching_techs(db, category)
+    matching_techs = _find_all_techs(db)
     if not matching_techs:
-        logger.warning("No technicians found with specialty '%s'", category)
+        logger.warning("No technicians found")
         return []
 
     tech_ids = [t.id for t in matching_techs]
@@ -256,9 +251,9 @@ def find_slots_for_date(
     today = now.date()
     now_min = now.hour * 60 + now.minute
 
-    matching_techs = _find_matching_techs(db, category)
+    matching_techs = _find_all_techs(db)
     if not matching_techs:
-        logger.warning("No technicians found with specialty '%s'", category)
+        logger.warning("No technicians found")
         return []
 
     tech_ids = [t.id for t in matching_techs]
@@ -358,12 +353,14 @@ def create_ticket_from_context(
     return ticket
 
 
-def verify_slot_available(db: Session, technician_id: str, start_iso: str) -> bool:
+def verify_slot_available(
+    db: Session, technician_id: str, start_iso: str, exclude_ticket_id: int | None = None,
+) -> bool:
     """Check that a slot hasn't been taken since it was offered."""
     start_dt = datetime.fromisoformat(start_iso)
     start_naive = start_dt.replace(tzinfo=None)
     check_date = start_naive.date()
     req_start = start_naive.hour * 60 + start_naive.minute
     req_end = req_start + SLOT_DURATION_MINUTES
-    occupied = _get_occupied_ranges(db, technician_id, check_date)
+    occupied = _get_occupied_ranges(db, technician_id, check_date, exclude_ticket_id)
     return not _overlaps(req_start, req_end, occupied)

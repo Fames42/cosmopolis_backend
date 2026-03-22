@@ -1,59 +1,54 @@
 SCENARIO: 01_plumbing_happy_path — Happy Path — Plumbing
-PHONE: 77001117892401
+PHONE: 77001118676601
 TENANT: Иван Петров (apt 101)
 EXPECTED STATES: ticket_created, closed
-STARTED: 2026-03-22 11:28:44
+STARTED: 2026-03-22 13:39:26
 ==================================================
 
 [Turn 1] STATE: service_collecting_details
-TENANT: Здравствуйте. У меня в квартире 101 течёт труба под кухонной раковиной, вода капает на пол.
-AGENT: Здравствуйте! Понял, спасибо. Похоже, это протечка под кухонной раковиной; если удобно, можете ещё прислать фото — это не обязательно, но может помочь мастеру.
+TENANT: Здравствуйте. У меня в квартире 101 течёт труба под кухонной раковиной, вода понемногу капает на пол.
+AGENT: Здравствуйте, Иван. Понял, спасибо — это протечка под кухонной раковиной.
 
-Скажите, пожалуйста, на какой день и во сколько вам удобно принять техника?
+Если удобно, можете отправить фото — это поможет мастеру подготовиться, но не обязательно. Когда вам было бы удобно принять техника: сегодня, завтра или в ближайшее время?
 DETAILS: scenario=service, subtype=plumbing
-TOOL: update_service_details(category=plumbing, urgency=medium, problem=Течёт труба под кухонной раковиной, вода капает на пол, location=кухня, под раковиной, danger_now=False) → ok
+TOOL: update_service_details(category=plumbing, urgency=medium, problem=Течёт труба под кухонной раковиной, вода понемногу капает на пол, location=кухня, под раковиной, danger_now=False) → ok
 ---
 
 [Turn 2] STATE: service_scheduling
-TENANT: Мне удобно как можно скорее, лучше сегодня. По времени — в любое время после 14:00.
-AGENT: Сегодня свободных визитов уже нет, к сожалению.
+TENANT: Фото могу отправить чуть позже. Лучше сегодня, если есть возможность.
+AGENT: Сегодня свободных выездов уже нет, но ближайшие есть завтра:
+1. 09:00–10:00
+2. 10:30–11:30
+3. 12:00–13:00
 
-Могу подобрать время на завтра или на ближайший удобный для вас день. Напишите, пожалуйста, какой день вам подходит и во сколько после 14:00 вам удобно.
+Какой вариант вам подходит?
 DETAILS: scenario=service, subtype=plumbing
-TOOL: search_available_slots(preferred_date=2026-03-22, preferred_time=14:00) → no_slots
+TOOL: update_service_details(photo_received=False) → ok
+TOOL: search_available_slots() → ok
 ---
 
-[Turn 3] STATE: service_scheduling
-TENANT: Завтра подойдёт. После 14:00 могу, лучше самое раннее время.
-AGENT: Есть свободное время завтра, 23 марта, с 14:00 до 15:00. Подходит?
-
-Если да, я сразу подтвержу этот визит.
-DETAILS: scenario=service, subtype=plumbing
-TOOL: search_available_slots(preferred_date=2026-03-23, preferred_time=14:00) → ok
----
-
-[Turn 4] STATE: service_ready_for_ticket
-TENANT: Да, подходит. Подтверждайте, пожалуйста.
-AGENT: Подтверждаю: протечка трубы под кухонной раковиной, визит мастера завтра, 23 марта, с 14:00 до 15:00. Мастер: Almat.
+[Turn 3] STATE: service_ready_for_ticket
+TENANT: 1. 09:00–10:00 подойдёт. Спасибо.
+AGENT: Отлично. Подтверждаю: протечка трубы под кухонной раковиной, визит завтра с 09:00 до 10:00, мастер Максим Техник.
 
 Всё верно?
 DETAILS: scenario=service, subtype=plumbing
 TOOL: select_time_slot(slot_index=0) → ok
 ---
 
-[Turn 5] STATE: closed
-TENANT: Да, всё верно, спасибо. Буду дома.
-AGENT: Спасибо! Заявка создана: TKT-34BA18FE.
+[Turn 4] STATE: closed
+TENANT: Да, всё верно. Спасибо, буду ждать.
+AGENT: Спасибо. Заявка создана: TKT-D919E4EB.
 
-Мастер Almat придёт завтра, 23 марта, с 14:00 до 15:00. Если понадобится, напишите нам снова.
+Мастер Максим Техник приедет завтра, 23.03, с 09:00 до 10:00. Хорошего вечера.
 DETAILS: scenario=service, subtype=plumbing
 TOOL: create_ticket() → ok
 TOOL: close_conversation() → ok
 ---
 
 ==================================================
-FINISHED: 2026-03-22 11:29:43
+FINISHED: 2026-03-22 13:40:14
 FINAL STATE: closed
-TOTAL TURNS: 5
-DURATION: 58s
+TOTAL TURNS: 4
+DURATION: 47s
 EXPECTED STATE REACHED: YES

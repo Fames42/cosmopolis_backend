@@ -76,7 +76,6 @@ class User(Base):
     phone = Column(String, nullable=True, default="")
     password_hash = Column(String)
     role = Column(Enum(RoleEnum), default=RoleEnum.dispatcher)
-    specialties = Column(JSON, nullable=True, default=list)  # e.g. ["plumbing", "electrical"]
     created_at = Column(DateTime, default=_utcnow)
 
     buildings = relationship("Building", back_populates="owner")

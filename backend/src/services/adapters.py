@@ -222,8 +222,10 @@ class SqlSchedulingService:
         raw = scheduler_mod.find_slot_for_time(self.db, category, target_date, hour, minute, exclude_ticket_id)
         return [SlotInfo(**s) for s in raw]
 
-    def verify_slot_available(self, technician_id: str, start_iso: str) -> bool:
-        return scheduler_mod.verify_slot_available(self.db, technician_id, start_iso)
+    def verify_slot_available(
+        self, technician_id: str, start_iso: str, exclude_ticket_id: int | None = None,
+    ) -> bool:
+        return scheduler_mod.verify_slot_available(self.db, technician_id, start_iso, exclude_ticket_id)
 
     def create_ticket(
         self, tenant_id: int, context_data: dict, conversation_id: int,
@@ -305,6 +307,10 @@ class SqlSchedulingService:
             .filter(
                 models.Ticket.ticket_number == ticket_number,
                 models.Ticket.tenant_id == tenant_id,
+                models.Ticket.status.notin_([
+                    models.TicketStatusEnum.done,
+                    models.TicketStatusEnum.cancelled,
+                ]),
             )
             .first()
         )
@@ -324,24 +330,31 @@ class SqlSchedulingService:
         self.db.commit()
         return True
 
-    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> bool:
+    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> tuple[bool, str]:
         ticket = (
             self.db.query(models.Ticket)
             .filter(
                 models.Ticket.ticket_number == ticket_number,
                 models.Ticket.tenant_id == tenant_id,
-                models.Ticket.status.notin_([
-                    models.TicketStatusEnum.done,
-                    models.TicketStatusEnum.cancelled,
-                ]),
             )
             .first()
         )
         if not ticket:
-            return False
+            return False, "not_found"
+        if ticket.status == models.TicketStatusEnum.cancelled:
+            return False, "already_cancelled"
+        if ticket.status == models.TicketStatusEnum.done:
+            return False, "already_done"
         ticket.status = models.TicketStatusEnum.cancelled
         self.db.commit()
-        return True
+        return True, "ok"
+
+    def find_technician_contact(self, category: str) -> dict | None:
+        techs = scheduler_mod._find_all_techs(self.db)
+        if techs:
+            tech = techs[0]
+            return {"name": tech.name, "phone": tech.phone or ""}
+        return None
 
 
 # ── WhatsAppNotificationService ──────────────────────────────────────────────
@@ -410,46 +423,53 @@ class WhatsAppNotificationService:
         category: str,
         urgency: str,
         scheduled_time: str,
-    ) -> None:
-        fallback = (
-            f"🔧 *Новая заявка: {ticket_number}*\n\n"
-            f"*Жилец:* {tenant.name}\n"
-            f"*Адрес:* {tenant.building_name}, кв. {tenant.apartment}\n"
-            f"*Проблема:* {description}\n"
-            f"*Категория:* {category}\n"
-            f"*Срочность:* {urgency}\n"
-            f"*Время визита:* {scheduled_time}\n\n"
-            "При возникновении вопросов свяжитесь с диспетчером."
-        )
+    ) -> bool:
+        try:
+            fallback = (
+                f"🔧 *Новая заявка: {ticket_number}*\n\n"
+                f"*Жилец:* {tenant.name}\n"
+                f"*Адрес:* {tenant.building_name}, кв. {tenant.apartment}\n"
+                f"*Проблема:* {description}\n"
+                f"*Категория:* {category}\n"
+                f"*Срочность:* {urgency}\n"
+                f"*Время визита:* {scheduled_time}\n\n"
+                "При возникновении вопросов свяжитесь с диспетчером."
+            )
 
-        user_content = (
-            f"TICKET DETAILS:\n"
-            f"Ticket number: {ticket_number}\n"
-            f"Technician name: {technician_name}\n"
-            f"Tenant name: {tenant.name}\n"
-            f"Building: {tenant.building_name}\n"
-            f"Apartment: {tenant.apartment}\n"
-            f"Problem: {description}\n"
-            f"Category: {category}\n"
-            f"Urgency: {urgency}\n"
-            f"Scheduled time: {scheduled_time}"
-        )
+            user_content = (
+                f"TICKET DETAILS:\n"
+                f"Ticket number: {ticket_number}\n"
+                f"Technician name: {technician_name}\n"
+                f"Tenant name: {tenant.name}\n"
+                f"Building: {tenant.building_name}\n"
+                f"Apartment: {tenant.apartment}\n"
+                f"Problem: {description}\n"
+                f"Category: {category}\n"
+                f"Urgency: {urgency}\n"
+                f"Scheduled time: {scheduled_time}"
+            )
 
-        message = self.llm.generate_message("technician_assignment", user_content, fallback)
+            message = self.llm.generate_message("technician_assignment", user_content, fallback)
 
-        # Find technician by matching offered slot technician_name
-        # The ticket's assigned_to is already set — look up via notifier
-        techs = (
-            self.db.query(models.User)
-            .filter(models.User.name == technician_name, models.User.role == models.RoleEnum.technician)
-            .all()
-        )
-        for tech in techs:
-            if tech.phone:
-                digits = notifier_mod._normalize_phone(tech.phone)
-                if digits:
-                    chat_id = f"{digits}@c.us"
-                    notifier_mod.send_whatsapp_reply(chat_id, message)
+            # Find technician by matching offered slot technician_name
+            # The ticket's assigned_to is already set — look up via notifier
+            techs = (
+                self.db.query(models.User)
+                .filter(models.User.name == technician_name, models.User.role == models.RoleEnum.technician)
+                .all()
+            )
+            sent = False
+            for tech in techs:
+                if tech.phone:
+                    digits = notifier_mod._normalize_phone(tech.phone)
+                    if digits:
+                        chat_id = f"{digits}@c.us"
+                        notifier_mod.send_whatsapp_reply(chat_id, message)
+                        sent = True
+            return sent
+        except Exception:
+            logger.exception("Failed to notify technician %s for ticket %s", technician_name, ticket_number)
+            return False
 
 
 # ── Factory ──────────────────────────────────────────────────────────────────

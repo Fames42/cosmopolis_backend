@@ -25,7 +25,7 @@ logger = logging.getLogger("uvicorn.error")
 # UTC+5 (Almaty/Astana timezone)
 TZ_ALMATY = timezone(timedelta(hours=5))
 
-ESCALATION_COOLDOWN_HOURS = 12
+ESCALATION_COOLDOWN_HOURS = 3
 
 # Tool name → state mapping for dashboard consistency
 TOOL_STATE_MAP = {
@@ -192,6 +192,8 @@ class AgentEngine:
 
         if response_id:
             ctx.update_context({"response_id": response_id})
+        else:
+            ctx.context_data.pop("response_id", None)
 
         # Tool execution loop
         rounds = 0
@@ -205,12 +207,17 @@ class AgentEngine:
                 try:
                     args = json.loads(call["arguments"]) if call["arguments"] else {}
                 except json.JSONDecodeError:
+                    logger.warning("Malformed tool arguments for %s: %s", name, call.get("arguments", "")[:200])
                     args = {}
 
                 logger.info("Tool call: %s(%s)", name, json.dumps(args, ensure_ascii=False))
                 tools_called.append(name)
 
-                result = self._execute_tool(name, args, ctx, history)
+                try:
+                    result = self._execute_tool(name, args, ctx, history)
+                except Exception:
+                    logger.exception("Tool execution failed: %s(%s)", name, json.dumps(args, ensure_ascii=False))
+                    result = {"status": "error", "message": f"Internal error executing {name}. Please try again."}
                 tools_log.append({"name": name, "args": args, "result": result})
                 tool_outputs.append({
                     "call_id": call_id,
@@ -227,14 +234,23 @@ class AgentEngine:
 
             if response_id:
                 ctx.update_context({"response_id": response_id})
+            else:
+                ctx.context_data.pop("response_id", None)
 
         # ── Fallback if no reply ─────────────────────────────────────────
         if not reply_text:
-            logger.warning("No reply text from LLM after %d rounds", rounds)
+            logger.warning("No reply text from LLM after %d rounds — auto-escalating", rounds)
             reply_text = (
                 "Произошла ошибка. Ваш запрос передан диспетчеру.\n"
                 "An error occurred. Your request has been forwarded to the dispatcher."
             )
+            # Actually escalate — don't just say we did
+            try:
+                self.notifier.escalate(ctx.tenant, ctx.phone, last_tenant_content, history)
+            except Exception:
+                logger.exception("Failed to escalate after MAX_TOOL_ROUNDS")
+            ctx.escalated_at = datetime.now(timezone.utc)
+            ctx.state = ConversationState.escalated_to_human
 
         # ── Update state based on tools called ───────────────────────────
         last_state = None
@@ -249,6 +265,12 @@ class AgentEngine:
                 ctx.status = "closed"
             if last_state == ConversationState.escalated_to_human:
                 ctx.escalated_at = datetime.now(timezone.utc)
+
+        # Handle auto-escalation triggered inside tool execution (e.g., emergency)
+        # This overrides the tool state mapping since escalation takes priority.
+        if ctx.context_data.get("_auto_escalated"):
+            ctx.state = ConversationState.escalated_to_human
+            ctx.escalated_at = ctx.escalated_at or datetime.now(timezone.utc)
 
         # Detect scenario from tools
         ticket_mgmt_tools = {"lookup_my_tickets", "reschedule_ticket", "add_ticket_comment", "cancel_ticket"}
@@ -327,9 +349,43 @@ class AgentEngine:
             preferred_date = args.get("preferred_date")
             preferred_time = args.get("preferred_time")
 
+            # Emergency: skip slot search, share technician contact, escalate
+            if urgency == "emergency":
+                tech_contact = self.scheduler.find_technician_contact(category)
+                try:
+                    last_msg = ""
+                    for msg in reversed(history):
+                        if msg.role == "tenant":
+                            last_msg = msg.content
+                            break
+                    self.notifier.escalate(ctx.tenant, ctx.phone, last_msg, history)
+                except Exception:
+                    logger.exception("Failed to auto-escalate emergency")
+                ctx.escalated_at = datetime.now(timezone.utc)
+                ctx.update_context({"_auto_escalated": True})
+                result = {
+                    "status": "escalated",
+                    "message": "Emergency escalated to dispatcher.",
+                }
+                if tech_contact:
+                    result["technician_contact"] = tech_contact
+                return result
+
             # When rescheduling, exclude the ticket being rescheduled so its
             # current time slot doesn't block the search.
             exclude_tid = ctx.context_data.get("reschedule_ticket_id")
+            if not exclude_tid:
+                tid_map = ctx.context_data.get("ticket_id_map", {})
+                # 1. LLM passed ticket_number explicitly (multi-ticket reschedule)
+                tn = args.get("ticket_number")
+                if tn and tn in tid_map:
+                    exclude_tid = tid_map[tn]
+                    ctx.update_context({"reschedule_ticket_id": exclude_tid, "reschedule_ticket_number": tn})
+                else:
+                    # 2. Fallback: reschedule_ticket_number set earlier
+                    rtn = ctx.context_data.get("reschedule_ticket_number")
+                    if rtn and rtn in tid_map:
+                        exclude_tid = tid_map[rtn]
 
             slots: list[SlotInfo] = []
             if preferred_date:
@@ -377,19 +433,18 @@ class AgentEngine:
                     ],
                 }
             else:
-                if urgency == "emergency":
-                    return {"status": "no_slots", "message": "No slots available. Consider escalating for emergency."}
                 return {"status": "no_slots", "message": "No slots available on this date. Ask the tenant for another date."}
 
         elif name == "select_time_slot":
             slot_index = args.get("slot_index", 0)
             offered = ctx.context_data.get("offered_slots", [])
+            exclude_tid = ctx.context_data.get("reschedule_ticket_id")
 
             if not (0 <= slot_index < len(offered)):
                 return {"status": "error", "message": f"Invalid slot index {slot_index}. Available: 0-{len(offered)-1}"}
 
             slot = offered[slot_index]
-            if self.scheduler.verify_slot_available(slot["technician_id"], slot["start"]):
+            if self.scheduler.verify_slot_available(slot["technician_id"], slot["start"], exclude_tid):
                 ctx.update_context({"selected_slot_index": slot_index})
                 return {
                     "status": "ok",
@@ -434,7 +489,7 @@ class AgentEngine:
                 offered = ctx.context_data.get("offered_slots", [])
                 selected_idx = ctx.context_data.get("selected_slot_index", 0)
                 slot = offered[selected_idx] if selected_idx < len(offered) else {}
-                self.notifier.notify_technician_assigned(
+                notified = self.notifier.notify_technician_assigned(
                     technician_name=slot.get("technician_name", "—"),
                     ticket_number=ticket.ticket_number,
                     tenant=ctx.tenant,
@@ -443,6 +498,9 @@ class AgentEngine:
                     urgency=ticket.urgency or "",
                     scheduled_time=slot.get("start", ""),
                 )
+                if not notified:
+                    logger.warning("Technician notification failed for ticket %s", ticket.ticket_number)
+                    ctx.update_context({"notification_failed": True})
 
             return {"status": "ok", "ticket_number": ticket.ticket_number}
 
@@ -456,7 +514,16 @@ class AgentEngine:
 
             self.notifier.escalate(ctx.tenant, ctx.phone, last_msg, history)
             ctx.escalated_at = datetime.now(timezone.utc)
-            return {"status": "ok", "message": "Escalated to dispatcher."}
+            result = {"status": "ok", "message": "Escalated to dispatcher."}
+
+            # For emergencies, also return technician contact info
+            if ctx.context_data.get("urgency") == "emergency":
+                category = ctx.context_data.get("category", "other")
+                tech_contact = self.scheduler.find_technician_contact(category)
+                if tech_contact:
+                    result["technician_contact"] = tech_contact
+
+            return result
 
         elif name == "lookup_my_tickets":
             summaries = self.scheduler.lookup_tenant_tickets(ctx.tenant.id)
@@ -496,14 +563,31 @@ class AgentEngine:
             if not (0 <= slot_index < len(offered)):
                 return {"status": "error", "message": f"Invalid slot index {slot_index}. Search for slots first."}
 
+            # Resolve exclude_ticket_id from context or ticket_id_map
+            exclude_tid = ctx.context_data.get("reschedule_ticket_id")
+            if not exclude_tid:
+                tid_map = ctx.context_data.get("ticket_id_map", {})
+                exclude_tid = tid_map.get(ticket_number)
+
             slot = offered[slot_index]
-            if not self.scheduler.verify_slot_available(slot["technician_id"], slot["start"]):
+            if not self.scheduler.verify_slot_available(slot["technician_id"], slot["start"], exclude_tid):
                 return {"status": "error", "message": "That slot is no longer available. Search for new slots."}
 
             result = self.scheduler.reschedule_ticket(
                 ticket_number, ctx.tenant.id, slot["technician_id"], slot["start"],
             )
             if result:
+                # Clear stale scheduling context; keep reschedule_ticket_id
+                # pointing at the same ticket so immediate re-reschedule works.
+                tid_map = ctx.context_data.get("ticket_id_map", {})
+                new_tid = tid_map.get(ticket_number, exclude_tid)
+                ctx.update_context({
+                    "offered_slots": [],
+                    "slots_presented": False,
+                    "selected_slot_index": None,
+                    "reschedule_ticket_id": new_tid,
+                    "reschedule_ticket_number": ticket_number,
+                })
                 return {
                     "status": "ok",
                     "ticket_number": result.ticket_number,
@@ -517,19 +601,29 @@ class AgentEngine:
             comment = args.get("comment", "")
             if not ticket_number or not comment:
                 return {"status": "error", "message": "ticket_number and comment are required."}
+            # Prevent duplicate comments on LLM retry
+            comment_key = f"{ticket_number}:{comment}"
+            if ctx.context_data.get("_last_comment") == comment_key:
+                return {"status": "ok", "message": "Comment already added."}
             success = self.scheduler.add_ticket_comment(ticket_number, ctx.tenant.id, comment)
             if success:
+                ctx.update_context({"_last_comment": comment_key})
                 return {"status": "ok", "message": "Comment added to ticket."}
-            return {"status": "error", "message": "Ticket not found or access denied."}
+            return {"status": "error", "message": "Ticket not found, already completed, or access denied."}
 
         elif name == "cancel_ticket":
             ticket_number = args.get("ticket_number", "")
             if not ticket_number:
                 return {"status": "error", "message": "ticket_number is required."}
-            success = self.scheduler.cancel_ticket(ticket_number, ctx.tenant.id)
+            success, reason = self.scheduler.cancel_ticket(ticket_number, ctx.tenant.id)
             if success:
                 return {"status": "ok", "message": f"Ticket {ticket_number} has been cancelled."}
-            return {"status": "error", "message": "Ticket not found, already completed, or access denied."}
+            error_messages = {
+                "not_found": "Ticket not found or access denied.",
+                "already_cancelled": f"Ticket {ticket_number} is already cancelled.",
+                "already_done": f"Ticket {ticket_number} is already completed and cannot be cancelled.",
+            }
+            return {"status": "error", "message": error_messages.get(reason, "Unable to cancel ticket.")}
 
         elif name == "close_conversation":
             ctx.state = ConversationState.closed

@@ -1,56 +1,61 @@
 SCENARIO: 03_heating_date_preference — Heating — Date Preference
-PHONE: 77001117892403
+PHONE: 77001118676603
 TENANT: Дмитрий Казаков (apt 312)
 EXPECTED STATES: ticket_created, closed
-STARTED: 2026-03-22 11:30:10
+STARTED: 2026-03-22 13:40:31
 ==================================================
 
 [Turn 1] STATE: service_collecting_details
-TENANT: Здравствуйте. Я Дмитрий Казаков, квартира 312. В гостиной перестала работать батарея, в квартире холодно.
-AGENT: Здравствуйте, Дмитрий. Понял, это срочно.
+TENANT: Здравствуйте. Я Дмитрий Казаков, квартира 312. В гостиной перестал работать радиатор, дома очень холодно.
+AGENT: Здравствуйте, Дмитрий. Понял, это срочно. Скажите, пожалуйста, есть ли сейчас какая-то непосредственная опасность — запах гари, искры, протечка или очень горячие трубы?
 
-Скажите, пожалуйста: сейчас есть какая-то непосредственная опасность — например, запах гари, искры, протечка или очень горячая труба? И на какой день и время вам удобно принять техника?
+Если нет, напишите, когда вам удобно принять техника: сегодня как можно скорее, завтра, или в другой день.
 DETAILS: scenario=service, subtype=heating
-TOOL: update_service_details(category=heating, urgency=high, problem=В гостиной перестала работать батарея, в квартире холодно., location=гостиная) → ok
+TOOL: update_service_details(category=heating, urgency=high, problem=Не работает радиатор, дома очень холодно, location=гостиная) → ok
 ---
 
-[Turn 2] STATE: service_collecting_details
-TENANT: Нет, непосредственной опасности нет — просто батарея в гостиной не греет, в квартире холодно. Лучше всего в четверг, по времени могу подстроиться.
-AGENT: Спасибо, понял. Тогда подскажите, пожалуйста, какое время в четверг вам удобно — например, 10:00, 14:00 или 18:00?
+[Turn 2] STATE: service_scheduling
+TENANT: Нет, ничего такого нет — просто батарея в гостиной совсем не греет, и в квартире холодно. Мне удобно в четверг, пожалуйста.
+AGENT: Спасибо, понял. На четверг есть свободные окна.
+
+Вот ближайшие варианты:
+1. 09:00–10:00
+2. 09:30–10:30
+3. 10:00–11:00
+4. 10:30–11:30
+5. 11:00–12:00
+6. 14:00–15:00
+7. 15:00–16:00
+8. 16:00–17:00
+
+Напишите, пожалуйста, номер удобного варианта.
 DETAILS: scenario=service, subtype=heating
-TOOL: update_service_details(danger_now=False) → ok
+TOOL: update_service_details(danger_now=False, category=heating, urgency=high, problem=Батарея в гостиной совсем не греет, в квартире холодно, location=гостиная) → ok
+TOOL: search_available_slots(preferred_date=2026-03-26) → ok
 ---
 
-[Turn 3] STATE: service_scheduling
-TENANT: 10:00 подойдет. Если не получится в четверг, тогда ближайшее доступное время.
-AGENT: Есть свободное окно в четверг, 26 марта, с 10:00 до 11:00. Подтвердить это время?
-DETAILS: scenario=service, subtype=heating
-TOOL: update_service_details(preferred_date=2026-03-26, preferred_time=10:00) → ok
-TOOL: search_available_slots(preferred_date=2026-03-26, preferred_time=10:00) → ok
----
+[Turn 3] STATE: service_ready_for_ticket
+TENANT: 1, пожалуйста.
+AGENT: Подтверждаю: проблема с радиатором в гостиной, в квартире холодно. Визит назначен на четверг, 26 марта, с 09:00 до 10:00, техник — Максим.
 
-[Turn 4] STATE: service_ready_for_ticket
-TENANT: Да, подтверждаю. Спасибо.
-AGENT: Проблема: батарея в гостиной не греет, в квартире холодно.
-Визит назначен на четверг, 26 марта, 10:00–11:00. Техник: Almat.
 Всё верно?
 DETAILS: scenario=service, subtype=heating
 TOOL: select_time_slot(slot_index=0) → ok
 ---
 
-[Turn 5] STATE: closed
+[Turn 4] STATE: closed
 TENANT: Да, всё верно. Спасибо.
-AGENT: Спасибо, Дмитрий. Заявка создана: TKT-23EF3F2B.
+AGENT: Спасибо. Заявка создана: TKT-54A76184.
 
-Техник Almat приедет в четверг, 26 марта, с 10:00 до 11:00. Если понадобится, напишите нам снова.
+Техник Максим придёт в четверг, 26 марта, с 09:00 до 10:00. Если понадобится, напишите нам снова.
 DETAILS: scenario=service, subtype=heating
 TOOL: create_ticket() → ok
 TOOL: close_conversation() → ok
 ---
 
 ==================================================
-FINISHED: 2026-03-22 11:31:07
+FINISHED: 2026-03-22 13:41:22
 FINAL STATE: closed
-TOTAL TURNS: 5
-DURATION: 57s
+TOTAL TURNS: 4
+DURATION: 50s
 EXPECTED STATE REACHED: YES

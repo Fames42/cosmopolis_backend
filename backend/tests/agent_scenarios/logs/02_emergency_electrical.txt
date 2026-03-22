@@ -1,32 +1,25 @@
 SCENARIO: 02_emergency_electrical — Emergency — Electrical
-PHONE: 77001117892402
+PHONE: 77001118676602
 TENANT: Мария Соколова (apt 205)
 EXPECTED STATES: ticket_created, escalated_to_human, closed
-STARTED: 2026-03-22 11:29:43
+STARTED: 2026-03-22 13:40:14
 ==================================================
 
-[Turn 1] STATE: service_collecting_details
-TENANT: Срочно помогите, пожалуйста. В спальне из розетки идут искры, и пахнет горелым.
-AGENT: Мария, это аварийная ситуация. Пожалуйста, немедленно отключите электричество на щитке, не трогайте эту розетку и держитесь от неё подальше.
+[Turn 1] STATE: escalated_to_human
+TENANT: Здравствуйте! Это Мария Соколова, кв. 205. В спальне из розетки идут искры, пахнет гарью, очень страшно — нужна срочная помощь.
+AGENT: Мария, это аварийная ситуация. Пожалуйста, если безопасно, немедленно отключите автомат/электричество в квартире или хотя бы в этой комнате и не пользуйтесь розеткой.
 
-Есть ли сейчас непосредственная опасность: огонь, дым или невозможно безопасно отключить питание? Если да — сразу скажите мне.
+Я уже передал срочный вызов дежурному. С вами свяжется техник Максим, телефон: +77014877150.
+
+Если видите дым или огонь — сразу звоните в экстренные службы. Если хотите, я могу также переключить вас на оператора.
 DETAILS: scenario=service, subtype=electrical
-TOOL: update_service_details(category=electrical, urgency=emergency, problem=Из розетки идут искры, пахнет горелым, location=спальня) → ok
----
-
-[Turn 2] STATE: escalated_to_human
-TENANT: Да, есть непосредственная опасность. Из розетки идут искры, пахнет горелым, я очень переживаю.
-AGENT: Мария, я уже срочно передал это диспетчеру.
-
-Если можете сделать это безопасно — отключите электричество на щитке. Не трогайте розетку, не пользуйтесь электроприборами рядом и, если появится дым или огонь, немедленно выйдите из квартиры и звоните в экстренные службы. Оператор свяжется с вами как можно скорее.
-DETAILS: scenario=service, subtype=electrical, requires_human=true
-TOOL: update_service_details(danger_now=True) → ok
-TOOL: escalate_to_human(reason=Аварийная электрическая ситуация: из розетки идут искры, запах гари, есть непосредственная опасность.) → ok
+TOOL: update_service_details(category=electrical, urgency=emergency, problem=Из розетки идут искры, пахнет гарью, location=спальня, danger_now=True) → ok
+TOOL: search_available_slots() → escalated
 ---
 
 ==================================================
-FINISHED: 2026-03-22 11:30:10
+FINISHED: 2026-03-22 13:40:31
 FINAL STATE: escalated_to_human
-TOTAL TURNS: 2
-DURATION: 26s
+TOTAL TURNS: 1
+DURATION: 16s
 EXPECTED STATE REACHED: YES

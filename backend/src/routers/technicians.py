@@ -81,7 +81,6 @@ def get_technicians(
             "name": t.name,
             "email": t.email or "",
             "phone": t.phone or "",
-            "specialties": t.specialties or [],
             "activeTickets": count or 0,
             "status": "ACTIVE",
         }
@@ -110,7 +109,6 @@ def get_all_technician_schedules(
         result.append(schemas.TechnicianScheduleOverview(
             technician_id=tech.id,
             technician_name=tech.name,
-            specialties=tech.specialties or [],
             schedules=[
                 schemas.TechnicianScheduleItem(
                     day_of_week=s.day_of_week,
@@ -139,7 +137,6 @@ def create_technician(
         phone=tech.phone,
         password_hash=get_password_hash(tech.password),
         role=models.RoleEnum.technician,
-        specialties=tech.specialties,
     )
     db.add(new_user)
     db.commit()
@@ -149,7 +146,6 @@ def create_technician(
         "name": new_user.name,
         "email": new_user.email,
         "phone": new_user.phone or "",
-        "specialties": new_user.specialties or [],
         "activeTickets": 0,
         "status": "ACTIVE"
     }
@@ -180,8 +176,6 @@ def update_technician(
         tech.email = tech_update.email
     if tech_update.phone is not None:
         tech.phone = tech_update.phone
-    if tech_update.specialties is not None:
-        tech.specialties = tech_update.specialties
 
     db.commit()
     db.refresh(tech)
@@ -196,7 +190,6 @@ def update_technician(
         "name": tech.name,
         "email": tech.email or "",
         "phone": tech.phone or "",
-        "specialties": tech.specialties or [],
         "activeTickets": active_count,
         "status": "ACTIVE"
     }

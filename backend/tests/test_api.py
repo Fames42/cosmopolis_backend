@@ -484,20 +484,15 @@ def test_webhook_flow():
         test("After escalation → reply mentions dispatcher", "диспетчер" in d["reply"].lower())
 
 
-# ── 10. Technician Schedules & Specialties ───────────────────────────────────
+# ── 10. Technician Schedules ──────────────────────────────────────────────────
 def test_technician_schedules():
-    section("10. Technician Schedules & Specialties")
+    section("10. Technician Schedules")
 
-    # Get technicians — should have specialties
+    # Get technicians
     r = get("/technicians", "dispatcher")
-    test("GET /technicians returns specialties", r.status_code == 200)
+    test("GET /technicians → 200", r.status_code == 200)
     if r.status_code == 200:
         techs = r.json()
-        techs_with_specs = [t for t in techs if t.get("specialties")]
-        test("Seeded techs have specialties", len(techs_with_specs) >= 2)
-        # Check that at least one tech has plumbing
-        has_plumbing = any("plumbing" in (t.get("specialties") or []) for t in techs)
-        test("At least one tech has plumbing specialty", has_plumbing)
 
     # Get schedule for a technician
     if r.status_code == 200 and techs:
@@ -533,27 +528,22 @@ def test_technician_schedules():
             ]
         })
 
-    # Update specialties
+    # Update technician profile
     if r.status_code == 200 and techs:
         tech_id = techs[0]["id"]
         r4 = put(f"/technicians/{tech_id}", "dispatcher", json={
-            "specialties": ["plumbing", "electrical", "heating"]
+            "name": techs[0]["name"]
         })
-        test("PUT /technicians/{id} specialties → 200", r4.status_code == 200)
-        if r4.status_code == 200:
-            test("Specialties updated", r4.json()["specialties"] == ["plumbing", "electrical", "heating"])
+        test("PUT /technicians/{id} → 200", r4.status_code == 200)
 
-    # Create technician with specialties
+    # Create technician
     r5 = post("/technicians", "dispatcher", json={
         "name": "Schedule Test Tech",
         "email": "schedtest@cosmopolis.com",
         "phone": "+7 000 999 88 77",
         "password": "test123",
-        "specialties": ["heating", "ventilation"],
     })
-    test("POST /technicians with specialties → 200", r5.status_code == 200)
-    if r5.status_code == 200:
-        test("Created tech has specialties", r5.json()["specialties"] == ["heating", "ventilation"])
+    test("POST /technicians → 200", r5.status_code == 200)
 
     # 404 for schedule of nonexistent tech
     r6 = get("/technicians/nonexistent-id/schedule", "dispatcher")

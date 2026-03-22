@@ -84,14 +84,13 @@ Create a new user.
   "email": "john@example.com",
   "password": "secret",
   "role": "dispatcher",
-  "phone": "+77771234567",
-  "specialties": ["plumbing", "electrical"]
+  "phone": "+77771234567"
 }
 ```
 
-`phone` and `specialties` are optional.
+`phone` is optional.
 
-**Response:** `UserResponse { id, name, email, role, phone, specialties, created_at }`
+**Response:** `UserResponse { id, name, email, role, phone, created_at }`
 
 ---
 
@@ -256,6 +255,21 @@ Get photos attached to a ticket.
 
 ---
 
+### `POST /api/tickets/export`
+
+Export selected tickets to an Excel (`.xlsx`) file.
+
+**Auth:** Any authenticated user
+
+**Request body:**
+```json
+{ "ticket_ids": ["TKT-A1B2C3D4", "TKT-E5F6G7H8"] }
+```
+
+**Response:** Binary file download (`application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`)
+
+---
+
 ## Technicians (`/api/technicians`)
 
 ### `GET /api/technicians`
@@ -272,7 +286,6 @@ List all technicians with active ticket counts.
     "name": "Maksim",
     "email": "maksim@cosmorent.kz",
     "phone": "+77771234567",
-    "specialties": ["plumbing", "heating"],
     "activeTickets": 3,
     "status": "ACTIVE"
   }
@@ -293,8 +306,7 @@ Create a new technician.
   "name": "New Tech",
   "email": "tech@example.com",
   "phone": "+77770001122",
-  "password": "pass123",
-  "specialties": ["electrical"]
+  "password": "pass123"
 }
 ```
 
@@ -313,8 +325,7 @@ Update technician profile.
 {
   "name": "Updated Name",
   "email": "new@example.com",
-  "phone": "+77770009999",
-  "specialties": ["plumbing", "structural"]
+  "phone": "+77770009999"
 }
 ```
 
@@ -334,7 +345,6 @@ Get all technicians' weekly schedules at once.
   {
     "technician_id": "uuid",
     "technician_name": "Maksim",
-    "specialties": ["plumbing"],
     "schedules": [
       { "day_of_week": 0, "start_time": "09:00", "end_time": "18:00" },
       { "day_of_week": 1, "start_time": "09:00", "end_time": "18:00" }
@@ -636,8 +646,8 @@ List all tenants with building info.
   "building_id": 1,
   "building_name": "Building A",
   "email": "aisha@example.com",
-  "move_in_date": "2025-09-01",
-  "lease_duration": "12 months",
+  "lease_start_date": "2025-09-01",
+  "lease_end_date": "2026-09-01",
   "adults": 2,
   "children": 1,
   "has_pets": false,
@@ -663,8 +673,8 @@ Create a new tenant.
   "apartment": "5A",
   "building_id": 1,
   "email": "tenant@example.com",
-  "move_in_date": "2026-01-15",
-  "lease_duration": "12 months",
+  "lease_start_date": "2026-01-15",
+  "lease_end_date": "2027-01-15",
   "adults": 1,
   "children": 0,
   "has_pets": false,
@@ -743,8 +753,8 @@ Assign a tenant to a building.
 | Field               | Type    | Description                                    |
 |---------------------|---------|------------------------------------------------|
 | `email`             | string  | Tenant email                                   |
-| `move_in_date`      | string  | Дата заселения (`YYYY-MM-DD`)                  |
-| `lease_duration`    | string  | Срок аренды (e.g. `"12 months"`)               |
+| `lease_start_date`  | string  | Дата заселения (`YYYY-MM-DD`)                  |
+| `lease_end_date`    | string  | Дата окончания аренды (`YYYY-MM-DD`)           |
 | `adults`            | int     | Количество взрослых                            |
 | `children`          | int     | Количество детей                               |
 | `has_pets`          | bool    | Питомцы (да/нет)                               |

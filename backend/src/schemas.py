@@ -14,12 +14,10 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
     phone: Optional[str] = None
-    specialties: Optional[List[str]] = None
 
 class UserResponse(UserBase):
     id: str
     phone: Optional[str] = None
-    specialties: Optional[List[str]] = None
     created_at: datetime
 
     class Config:
@@ -45,7 +43,6 @@ class TechnicianResponse(BaseModel):
     name: str
     email: str = ""
     phone: str = ""
-    specialties: List[str] = []
     activeTickets: int = 0
     status: str = "ACTIVE"
 
@@ -57,13 +54,11 @@ class TechnicianCreate(BaseModel):
     email: EmailStr
     phone: str = ""
     password: str
-    specialties: List[str] = []
 
 class TechnicianUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
-    specialties: Optional[List[str]] = None
 
 # --- Building Schemas ---
 class BuildingBase(BaseModel):
@@ -288,7 +283,6 @@ class TicketUpdateStatus(BaseModel):
 class TechnicianScheduleOverview(BaseModel):
     technician_id: str
     technician_name: str
-    specialties: List[str] = []
     schedules: List[TechnicianScheduleItem] = []
 
 class TechnicianWorkloadItem(BaseModel):
