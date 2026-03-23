@@ -117,9 +117,18 @@ class MessageBuffer:
 
             phone = messages[0].phone
 
-            result = await asyncio.get_running_loop().run_in_executor(
-                None, self._process_sync, phone, chat_id,
-            )
+            try:
+                result = await asyncio.get_running_loop().run_in_executor(
+                    None, self._process_sync, phone, chat_id,
+                )
+            except Exception:
+                logger.exception("Executor failed for %s", chat_id)
+                result = (
+                    "Произошла ошибка. Пожалуйста, попробуйте позже.\n"
+                    "An error occurred. Please try again later.",
+                    "error",
+                    None,
+                )
 
             for fut in futures:
                 if not fut.done():
@@ -154,6 +163,14 @@ class MessageBuffer:
             snapshot = engine.store.get_or_create_conversation(tenant.id, chat_id)
             ctx = ConversationContext(snapshot, tenant, phone)
             return engine.process_conversation(ctx)
+        except Exception:
+            logger.exception("process_sync failed for %s", phone)
+            return (
+                "Произошла ошибка. Пожалуйста, попробуйте позже.\n"
+                "An error occurred. Please try again later.",
+                "error",
+                None,
+            )
         finally:
             db.close()
 

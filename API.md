@@ -84,13 +84,14 @@ Create a new user.
   "email": "john@example.com",
   "password": "secret",
   "role": "dispatcher",
-  "phone": "+77771234567"
+  "phone": "+77771234567",
+  "is_head": false
 }
 ```
 
-`phone` is optional.
+`phone` and `is_head` are optional. `is_head` grants a technician dispatcher-level access.
 
-**Response:** `UserResponse { id, name, email, role, phone, created_at }`
+**Response:** `UserResponse { id, name, email, role, phone, is_head, created_at }`
 
 ---
 
@@ -286,6 +287,7 @@ List all technicians with active ticket counts.
     "name": "Maksim",
     "email": "maksim@cosmorent.kz",
     "phone": "+77771234567",
+    "is_head": false,
     "activeTickets": 3,
     "status": "ACTIVE"
   }
@@ -306,7 +308,8 @@ Create a new technician.
   "name": "New Tech",
   "email": "tech@example.com",
   "phone": "+77770001122",
-  "password": "pass123"
+  "password": "pass123",
+  "is_head": false
 }
 ```
 
@@ -325,7 +328,8 @@ Update technician profile.
 {
   "name": "Updated Name",
   "email": "new@example.com",
-  "phone": "+77770009999"
+  "phone": "+77770009999",
+  "is_head": true
 }
 ```
 

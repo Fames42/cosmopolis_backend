@@ -14,9 +14,11 @@ def get_analytics_summary(db: Session = Depends(get_db)) -> Dict[str, Any]:
     # Total tickets
     total_tickets = db.query(models.Ticket).count()
     
-    # Tickets by status
+    # Tickets by status — always include all statuses (0 if none)
     status_counts = db.query(models.Ticket.status, func.count(models.Ticket.id)).group_by(models.Ticket.status).all()
-    status_dict = {status.value: count for status, count in status_counts}
+    status_dict = {s.value: 0 for s in models.TicketStatusEnum}
+    for status, count in status_counts:
+        status_dict[status.value] = count
 
     # active conversations
     open_conversations = db.query(models.Conversation).filter(models.Conversation.status == models.ConversationStatusEnum.open).count()

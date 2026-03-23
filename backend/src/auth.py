@@ -65,12 +65,17 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 # RBAC Dependencies
 def check_role(allowed_roles: list[models.RoleEnum]):
     def role_checker(current_user: models.User = Depends(get_current_user)):
-        if current_user.role not in allowed_roles:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Not enough permissions to access this resource"
-            )
-        return current_user
+        if current_user.role in allowed_roles:
+            return current_user
+        # Head technician gets dispatcher-level access
+        if (current_user.role == models.RoleEnum.technician
+                and current_user.is_head
+                and models.RoleEnum.dispatcher in allowed_roles):
+            return current_user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions to access this resource"
+        )
     return role_checker
 
 # Helper for standard role scopes
@@ -98,7 +103,8 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db:
         "id": user.id,
         "name": user.name,
         "email": user.email,
-        "role": user.role.value
+        "role": user.role.value,
+        "is_head": user.is_head or False,
     }}
 
 @router.post("/login", response_model=schemas.LoginResponse)
@@ -118,7 +124,8 @@ def login(login_data: schemas.LoginRequest, db: Session = Depends(get_db)):
         "user": {
             "id": user.id,
             "email": user.email,
-            "role": user.role.value.upper()
+            "role": user.role.value.upper(),
+            "is_head": user.is_head or False,
         }
     }
 

@@ -81,6 +81,7 @@ def get_technicians(
             "name": t.name,
             "email": t.email or "",
             "phone": t.phone or "",
+            "is_head": t.is_head or False,
             "activeTickets": count or 0,
             "status": "ACTIVE",
         }
@@ -137,6 +138,7 @@ def create_technician(
         phone=tech.phone,
         password_hash=get_password_hash(tech.password),
         role=models.RoleEnum.technician,
+        is_head=tech.is_head,
     )
     db.add(new_user)
     db.commit()
@@ -146,6 +148,7 @@ def create_technician(
         "name": new_user.name,
         "email": new_user.email,
         "phone": new_user.phone or "",
+        "is_head": new_user.is_head or False,
         "activeTickets": 0,
         "status": "ACTIVE"
     }
@@ -176,6 +179,8 @@ def update_technician(
         tech.email = tech_update.email
     if tech_update.phone is not None:
         tech.phone = tech_update.phone
+    if tech_update.is_head is not None:
+        tech.is_head = tech_update.is_head
 
     db.commit()
     db.refresh(tech)
@@ -190,9 +195,41 @@ def update_technician(
         "name": tech.name,
         "email": tech.email or "",
         "phone": tech.phone or "",
+        "is_head": tech.is_head or False,
         "activeTickets": active_count,
         "status": "ACTIVE"
     }
+
+@router.delete("/{tech_id}", status_code=200)
+def delete_technician(
+    tech_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    if current_user.role != models.RoleEnum.admin:
+        raise HTTPException(status_code=403, detail="Only admins can delete technicians")
+    tech = db.query(models.User).filter(
+        models.User.id == tech_id,
+        models.User.role == models.RoleEnum.technician,
+    ).first()
+    if not tech:
+        raise HTTPException(status_code=404, detail="Техник не найден")
+
+    # Unassign tickets
+    db.query(models.Ticket).filter(models.Ticket.assigned_to == tech_id).update(
+        {"assigned_to": None}
+    )
+    # Remove notes authored by this technician
+    db.query(models.TicketNote).filter(models.TicketNote.author_id == tech_id).delete()
+    # Remove schedule
+    db.query(models.TechnicianSchedule).filter(
+        models.TechnicianSchedule.technician_id == tech_id
+    ).delete()
+
+    db.delete(tech)
+    db.commit()
+    return {"detail": "Техник удалён"}
+
 
 @router.get("/me/schedule", response_model=List[schemas.TechnicianScheduleResponse])
 def get_my_schedule(

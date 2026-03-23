@@ -94,12 +94,16 @@ def extract_name_from_contact(text: str) -> str:
 
 
 def normalize_category(raw: str) -> str:
-    """Normalize category: Cyrillic А→A, В→B, etc."""
+    """Normalize category: Cyrillic А→A, В→B, С→C, etc."""
+    CYRILLIC_TO_LATIN = {"А": "A", "В": "B", "С": "C", "а": "A", "в": "B", "с": "C"}
     raw = raw.strip()
+    # Single-char Cyrillic → Latin
+    if raw in CYRILLIC_TO_LATIN:
+        return CYRILLIC_TO_LATIN[raw]
     normalized = normalize_text(raw).upper()
     if normalized in ("A", "B", "C"):
         return normalized
-    if "не обслуживаем" in raw.lower() or "не обслуживаем" in raw:
+    if "не обслуживаем" in raw.lower():
         return "no_service"
     if normalized in ("-", ""):
         return ""
@@ -168,9 +172,6 @@ def parse_xlsx(filepath: str) -> list[dict]:
         if company in ("-----", "None", ""):
             company = ""
 
-        # Build notes from category only (company stored separately)
-        notes = f"Категория: {category}" if category else ""
-
         tenants.append({
             "building_name": building_name,
             "apartment": apartment,
@@ -179,7 +180,8 @@ def parse_xlsx(filepath: str) -> list[dict]:
             "lease_start_date": format_date(lease_start),
             "lease_end_date": format_date(lease_end),
             "emergency_contact": extra_contact if extra_contact and extra_contact != "None" else "",
-            "notes": notes,
+            "notes": "",
+            "category": category,
             "company": company,
             "agent_enabled": False,
         })
@@ -246,6 +248,7 @@ def import_tenants():
                 lease_end_date=r["lease_end_date"] or None,
                 emergency_contact=r["emergency_contact"] or None,
                 notes=r["notes"] or None,
+                category=r["category"] or None,
                 company=r["company"] or None,
                 agent_enabled=r["agent_enabled"],
             )

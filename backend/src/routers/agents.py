@@ -38,6 +38,7 @@ class TenantCreateRequest(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None
     company: Optional[str] = None
     agent_enabled: bool = True
 
@@ -55,6 +56,7 @@ class TenantUpdateRequest(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None
     company: Optional[str] = None
     agent_enabled: Optional[bool] = None
 
@@ -75,6 +77,7 @@ class TenantListItem(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None
     company: Optional[str] = None
     agent_enabled: bool = True
 
@@ -153,6 +156,7 @@ def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> 
         parking_slot=tenant.parking_slot,
         emergency_contact=tenant.emergency_contact,
         notes=tenant.notes,
+        category=tenant.category,
         company=tenant.company,
         agent_enabled=tenant.agent_enabled,
     )
@@ -210,6 +214,7 @@ def create_tenant(
         parking_slot=body.parking_slot,
         emergency_contact=body.emergency_contact,
         notes=body.notes,
+        category=body.category,
         company=body.company,
         agent_enabled=body.agent_enabled,
     )

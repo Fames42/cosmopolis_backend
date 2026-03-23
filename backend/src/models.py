@@ -76,6 +76,7 @@ class User(Base):
     phone = Column(String, nullable=True, default="")
     password_hash = Column(String)
     role = Column(Enum(RoleEnum), default=RoleEnum.dispatcher)
+    is_head = Column(Boolean, default=False)
     created_at = Column(DateTime, default=_utcnow)
 
     buildings = relationship("Building", back_populates="owner")
@@ -113,6 +114,7 @@ class Tenant(Base):
     parking_slot = Column(String, nullable=True)          # номер парковочного места
     emergency_contact = Column(String, nullable=True)     # контакт для экстренных случаев
     notes = Column(Text, nullable=True)                   # дополнительно (свободный текст)
+    category = Column(String, nullable=True)               # категория клиента: A, B, C, no_service
     company = Column(String, nullable=True)               # компания клиента
     agent_enabled = Column(Boolean, nullable=False, default=False)  # AI agent support on/off
 

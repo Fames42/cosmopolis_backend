@@ -56,6 +56,7 @@ class SchedulingService(Protocol):
 
     def verify_slot_available(
         self, technician_id: str, start_iso: str,
+        exclude_ticket_id: int | None = None,
     ) -> bool: ...
 
     def create_ticket(
@@ -72,7 +73,9 @@ class SchedulingService(Protocol):
         self, ticket_number: str, tenant_id: int, comment: str,
     ) -> bool: ...
 
-    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> bool: ...
+    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> tuple[bool, str]: ...
+
+    def find_technician_contact(self, category: str) -> dict | None: ...
 
 
 class NotificationService(Protocol):
@@ -97,7 +100,7 @@ class NotificationService(Protocol):
         category: str,
         urgency: str,
         scheduled_time: str,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class LLMClient(Protocol):

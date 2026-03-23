@@ -14,10 +14,12 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
     phone: Optional[str] = None
+    is_head: bool = False
 
 class UserResponse(UserBase):
     id: str
     phone: Optional[str] = None
+    is_head: bool = False
     created_at: datetime
 
     class Config:
@@ -43,6 +45,7 @@ class TechnicianResponse(BaseModel):
     name: str
     email: str = ""
     phone: str = ""
+    is_head: bool = False
     activeTickets: int = 0
     status: str = "ACTIVE"
 
@@ -54,11 +57,13 @@ class TechnicianCreate(BaseModel):
     email: EmailStr
     phone: str = ""
     password: str
+    is_head: bool = False
 
 class TechnicianUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[EmailStr] = None
     phone: Optional[str] = None
+    is_head: Optional[bool] = None
 
 # --- Building Schemas ---
 class BuildingBase(BaseModel):
@@ -90,6 +95,7 @@ class TenantBase(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None
     company: Optional[str] = None
     agent_enabled: bool = False
 
@@ -110,6 +116,7 @@ class TenantUpdate(BaseModel):
     parking_slot: Optional[str] = None
     emergency_contact: Optional[str] = None
     notes: Optional[str] = None
+    category: Optional[str] = None
     company: Optional[str] = None
     agent_enabled: Optional[bool] = None
 
@@ -200,6 +207,7 @@ class UserAuthInfo(BaseModel):
     id: str
     email: str
     role: str
+    is_head: bool = False
 
 class LoginResponse(BaseModel):
     token: str

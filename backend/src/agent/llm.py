@@ -45,7 +45,7 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "search_available_slots",
-        "description": "Search for available technician time slots. All parameters are optional. Call with no arguments to get nearest slots, with just preferred_date to get all slots for that day, or with both for an exact time check. Do NOT ask the tenant repeatedly for a precise time — search proactively and present options.",
+        "description": "Search for available technician time slots. IMPORTANT: For emergencies (urgency=emergency), you MUST call this tool — it auto-escalates to the dispatcher and returns the on-call technician's contact info. All parameters are optional. Call with no arguments to get nearest slots, with just preferred_date to get all slots for that day, or with both for an exact time check. Do NOT ask the tenant repeatedly for a precise time — search proactively and present options. When rescheduling, pass ticket_number so its current slot is excluded from the search.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -56,6 +56,10 @@ TOOL_DEFINITIONS = [
                 "preferred_time": {
                     "type": "string",
                     "description": "Preferred time in HH:MM format (e.g., '09:30', '14:00'). If provided with preferred_date, checks availability at that exact time first.",
+                },
+                "ticket_number": {
+                    "type": "string",
+                    "description": "Ticket number being rescheduled (e.g., 'TKT-ABCD1234'). Pass this when searching slots for a reschedule so the ticket's current slot is not blocked.",
                 },
             },
             "required": [],
@@ -95,7 +99,7 @@ TOOL_DEFINITIONS = [
     {
         "type": "function",
         "name": "escalate_to_human",
-        "description": "Transfer the conversation to a human dispatcher. Use when the tenant requests a human, the issue is too complex, or the tenant is upset.",
+        "description": "Transfer the conversation to a human dispatcher. Use when the tenant requests a human, the issue is too complex, or the tenant is upset. For emergencies, prefer calling search_available_slots instead — it auto-escalates AND provides the technician's contact info.",
         "parameters": {
             "type": "object",
             "properties": {

@@ -17,7 +17,7 @@ def read_conversations(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_current_user)
 ):
-    if current_user.role == models.RoleEnum.technician:
+    if current_user.role == models.RoleEnum.technician and not current_user.is_head:
         raise HTTPException(status_code=403, detail="Technicians cannot view WhatsApp conversations")
 
     conversations = db.query(models.Conversation).order_by(desc(models.Conversation.created_at)).offset(skip).limit(limit).all()
@@ -29,7 +29,7 @@ def read_conversation(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_current_user)
 ):
-    if current_user.role == models.RoleEnum.technician:
+    if current_user.role == models.RoleEnum.technician and not current_user.is_head:
         raise HTTPException(status_code=403, detail="Technicians cannot view WhatsApp conversations")
 
     conversation = db.query(models.Conversation).filter(models.Conversation.id == conversation_id).first()
@@ -47,7 +47,7 @@ def get_message_media(
     current_user: models.User = Depends(get_current_user),
 ):
     """Get media (image) attached to a specific message. Returns {media_url: "data:image/...;base64,...", message_type: "image"}."""
-    if current_user.role == models.RoleEnum.technician:
+    if current_user.role == models.RoleEnum.technician and not current_user.is_head:
         raise HTTPException(status_code=403, detail="Technicians cannot view WhatsApp conversations")
 
     message = (
