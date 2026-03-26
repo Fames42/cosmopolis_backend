@@ -131,6 +131,19 @@ def compute_lease_duration(start, end) -> str:
     return f"до {format_date(end)}"
 
 
+def clean_numeric(val) -> str:
+    """Convert numeric xlsx value to clean string (strip .0 from floats)."""
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        if val == int(val):
+            return str(int(val))
+        return str(val)
+    if isinstance(val, int):
+        return str(val)
+    return str(val).strip()
+
+
 def parse_xlsx(filepath: str) -> list[dict]:
     """Parse info.xlsx and return normalized tenant dicts."""
     wb = openpyxl.load_workbook(filepath)
@@ -145,13 +158,21 @@ def parse_xlsx(filepath: str) -> list[dict]:
         obj = str(obj).strip()
         building_name, apartment = split_building_apartment(obj)
 
-        lease_start = row[2]
-        lease_end = row[3]
-        category_raw = str(row[4]).strip() if row[4] else ""
-        client_name = str(row[5]).strip() if row[5] else ""
-        company = str(row[6]).strip() if row[6] else ""
-        primary_contact = str(row[7]).strip() if row[7] else ""
-        extra_contact = str(row[8]).strip() if row[8] else ""
+        # New column layout (columns C-H are building detail fields)
+        address = str(row[2]).strip() if row[2] else ""
+        house_number = clean_numeric(row[3])
+        legal_number = clean_numeric(row[4])
+        floor = clean_numeric(row[5])
+        block = clean_numeric(row[6])
+        actual_number = clean_numeric(row[7])
+
+        lease_start = row[8]
+        lease_end = row[9]
+        category_raw = str(row[10]).strip() if row[10] else ""
+        client_name = str(row[11]).strip() if row[11] else ""
+        company = str(row[12]).strip() if row[12] else ""
+        primary_contact = str(row[13]).strip() if row[13] else ""
+        extra_contact = str(row[14]).strip() if row[14] else ""
 
         # Normalize
         category = normalize_category(category_raw)
@@ -175,6 +196,12 @@ def parse_xlsx(filepath: str) -> list[dict]:
         tenants.append({
             "building_name": building_name,
             "apartment": apartment,
+            "address": address if address and address != "None" else "",
+            "house_number": house_number,
+            "legal_number": legal_number,
+            "floor": floor,
+            "block": block,
+            "actual_number": actual_number,
             "name": name,
             "phone": phone,
             "lease_start_date": format_date(lease_start),
@@ -222,27 +249,28 @@ def import_tenants():
         db.flush()
         print(f"Cleared {deleted_tenants} tenants, {deleted_buildings} buildings (and related tickets/conversations)")
 
-        # Collect unique buildings
-        building_names = sorted(set(r["building_name"] for r in rows))
-        print(f"Found {len(building_names)} unique buildings")
-
-        # Create buildings
-        building_map: dict[str, int] = {}
-        for bname in building_names:
-            b = Building(name=bname, address=bname, owner_id=owner_id)
-            db.add(b)
-            db.flush()
-            building_map[bname] = b.id
-
-        # Import tenants
+        # Create one building per row and link tenant to it
+        buildings_created = 0
         tenants_created = 0
         for r in rows:
-            bid = building_map[r["building_name"]]
+            b = Building(
+                name=r["building_name"],
+                address=r["address"] or r["building_name"],
+                house_number=r["house_number"] or None,
+                legal_number=r["legal_number"] or None,
+                floor=r["floor"] or None,
+                block=r["block"] or None,
+                actual_number=r["actual_number"] or None,
+                owner_id=owner_id,
+            )
+            db.add(b)
+            db.flush()
+            buildings_created += 1
 
             t = Tenant(
                 name=r["name"],
                 phone=r["phone"],
-                building_id=bid,
+                building_id=b.id,
                 apartment=r["apartment"],
                 lease_start_date=r["lease_start_date"] or None,
                 lease_end_date=r["lease_end_date"] or None,
@@ -258,7 +286,7 @@ def import_tenants():
         db.commit()
 
         print(f"\n=== Import Summary ===")
-        print(f"Buildings created: {len(building_names)}")
+        print(f"Buildings created: {buildings_created}")
         print(f"Tenants imported:  {tenants_created}")
         print("Done!")
 

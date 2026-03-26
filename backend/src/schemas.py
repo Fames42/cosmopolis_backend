@@ -69,6 +69,11 @@ class TechnicianUpdate(BaseModel):
 class BuildingBase(BaseModel):
     name: str
     address: str
+    house_number: Optional[str] = None
+    legal_number: Optional[str] = None
+    floor: Optional[str] = None
+    block: Optional[str] = None
+    actual_number: Optional[str] = None
 
 class BuildingCreate(BuildingBase):
     owner_id: str
@@ -76,7 +81,7 @@ class BuildingCreate(BuildingBase):
 class BuildingResponse(BuildingBase):
     id: int
     owner_id: str
-    
+
     class Config:
         from_attributes = True
 

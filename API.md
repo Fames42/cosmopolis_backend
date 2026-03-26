@@ -613,8 +613,20 @@ List all buildings with tenant counts.
 
 **Response:**
 ```json
-[{ "id": 1, "name": "Building A", "address": "123 Main St", "tenant_count": 12 }]
+[{
+  "id": 1,
+  "name": "ESENTAI APARTMENTS A",
+  "address": "проспект Аль-Фараби",
+  "house_number": "77/1",
+  "legal_number": "42",
+  "floor": "8",
+  "block": "А",
+  "actual_number": "8С",
+  "tenant_count": 1
+}]
 ```
+
+Each building represents a specific unit/object (one per tenant row in the import).
 
 ---
 
@@ -624,8 +636,18 @@ Create a new building (owner set to current user).
 
 **Request body:**
 ```json
-{ "name": "Building D", "address": "456 Oak Ave" }
+{
+  "name": "Building D",
+  "address": "456 Oak Ave",
+  "house_number": "10",
+  "legal_number": "42",
+  "floor": "3",
+  "block": "A",
+  "actual_number": "5C"
+}
 ```
+
+All fields except `name` and `address` are optional.
 
 **Response:** `BuildingListItem`
 
@@ -749,6 +771,18 @@ Assign a tenant to a building.
 ```
 
 **Response:** `TenantListItem`
+
+---
+
+### Building Optional Fields Reference
+
+| Field            | Type   | Description                          |
+|------------------|--------|--------------------------------------|
+| `house_number`   | string | № дома                               |
+| `legal_number`   | string | Юридический номер квартиры (№ юр)    |
+| `floor`          | string | Этаж                                 |
+| `block`          | string | Блок                                 |
+| `actual_number`  | string | Фактический номер квартиры (№ факт)  |
 
 ---
 

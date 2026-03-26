@@ -90,6 +90,11 @@ class Building(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
     address = Column(String)
+    house_number = Column(String, nullable=True)
+    legal_number = Column(String, nullable=True)
+    floor = Column(String, nullable=True)
+    block = Column(String, nullable=True)
+    actual_number = Column(String, nullable=True)
     owner_id = Column(String, ForeignKey("users.id"), index=True)
 
     owner = relationship("User", back_populates="buildings")

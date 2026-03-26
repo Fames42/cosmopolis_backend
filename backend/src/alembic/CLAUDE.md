@@ -10,7 +10,10 @@ alembic/
     ├── 003_add_tenant_company.py
     ├── 004_add_managing_ticket_state.py
     ├── 005_rename_tenant_lease_columns.py
-    └── 006_drop_user_specialties.py
+    ├── 006_drop_user_specialties.py
+    ├── 007_add_user_is_head.py
+    ├── 008_add_tenant_category.py
+    └── 009_add_building_detail_columns.py
 ```
 
 ## Conventions

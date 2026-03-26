@@ -16,11 +16,21 @@ router = APIRouter()
 class BuildingCreateRequest(BaseModel):
     name: str
     address: str
+    house_number: Optional[str] = None
+    legal_number: Optional[str] = None
+    floor: Optional[str] = None
+    block: Optional[str] = None
+    actual_number: Optional[str] = None
 
 class BuildingListItem(BaseModel):
     id: int
     name: str
     address: str
+    house_number: Optional[str] = None
+    legal_number: Optional[str] = None
+    floor: Optional[str] = None
+    block: Optional[str] = None
+    actual_number: Optional[str] = None
     tenant_count: int
 
 class TenantCreateRequest(BaseModel):
@@ -102,6 +112,11 @@ def list_buildings(
             models.Building.id,
             models.Building.name,
             models.Building.address,
+            models.Building.house_number,
+            models.Building.legal_number,
+            models.Building.floor,
+            models.Building.block,
+            models.Building.actual_number,
             func.count(models.Tenant.id).label("tenant_count"),
         )
         .outerjoin(models.Tenant, models.Tenant.building_id == models.Building.id)
@@ -111,7 +126,12 @@ def list_buildings(
         .all()
     )
     return [
-        BuildingListItem(id=r.id, name=r.name, address=r.address, tenant_count=r.tenant_count)
+        BuildingListItem(
+            id=r.id, name=r.name, address=r.address,
+            house_number=r.house_number, legal_number=r.legal_number,
+            floor=r.floor, block=r.block, actual_number=r.actual_number,
+            tenant_count=r.tenant_count,
+        )
         for r in rows
     ]
 
@@ -125,6 +145,11 @@ def create_building(
     building = models.Building(
         name=body.name,
         address=body.address,
+        house_number=body.house_number,
+        legal_number=body.legal_number,
+        floor=body.floor,
+        block=body.block,
+        actual_number=body.actual_number,
         owner_id=current_user.id,
     )
     db.add(building)
@@ -134,6 +159,11 @@ def create_building(
         id=building.id,
         name=building.name,
         address=building.address,
+        house_number=building.house_number,
+        legal_number=building.legal_number,
+        floor=building.floor,
+        block=building.block,
+        actual_number=building.actual_number,
         tenant_count=0,
     )
 
