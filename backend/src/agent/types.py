@@ -48,6 +48,12 @@ class TenantInfo:
     building_name: str
     apartment: str
     agent_enabled: bool
+    building_address: str = ""
+    building_house_number: str = ""
+    building_floor: str = ""
+    building_block: str = ""
+    building_actual_number: str = ""
+    building_legal_number: str = ""
 
 
 @dataclass(frozen=True)

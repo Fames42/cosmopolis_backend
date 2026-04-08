@@ -6,7 +6,8 @@ RULES:
 - Write in Russian
 - Be concise: 5-8 lines maximum
 - Use WhatsApp formatting: *bold* for labels
-- Include: ticket number, tenant name, building and apartment, problem description, scheduled date and time
+- Include: ticket number, tenant name, full address (building, address, house number, block/entrance, floor, apartment), problem description, scheduled date and time
+- If address details (house number, block, floor) are provided, include them — they help the technician locate the unit
 - Mention the category and urgency in a natural way (not as raw codes)
 - End with a reminder to contact dispatch if any issues arise
 - Output plain text only, no JSON

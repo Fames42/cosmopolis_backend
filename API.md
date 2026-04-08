@@ -774,6 +774,46 @@ Assign a tenant to a building.
 
 ---
 
+### `POST /api/agents/notifications/broadcast`
+
+Send a WhatsApp notification to all tenants in a building, optionally filtered by block and house number.
+
+**Auth:** Admin or Agent
+
+**Request body:**
+```json
+{
+  "building_id": 1,
+  "block": "А",
+  "house_number": "77/1",
+  "message": "Уважаемые жильцы, завтра будет отключена вода с 10:00 до 14:00."
+}
+```
+
+| Field          | Type   | Required | Description                          |
+|----------------|--------|----------|--------------------------------------|
+| `building_id`  | int    | Yes      | Building to target                   |
+| `block`        | string | No       | Filter by block (exact match)        |
+| `house_number` | string | No       | Filter by house number (exact match) |
+| `message`      | string | Yes      | Notification text to send            |
+
+**Response:**
+```json
+{
+  "total_tenants": 15,
+  "sent": 14,
+  "skipped": 1,
+  "details": [
+    { "tenant": "Иванов И.И.", "status": "sent" },
+    { "tenant": "Петров П.П.", "status": "skipped", "reason": "no phone" }
+  ]
+}
+```
+
+**Errors:** `404` if no buildings match or no tenants found in matching buildings.
+
+---
+
 ### Building Optional Fields Reference
 
 | Field            | Type   | Description                          |

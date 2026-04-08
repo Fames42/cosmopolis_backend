@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -7,6 +9,9 @@ from typing import Optional
 from .. import models
 from ..database import get_db
 from ..auth import get_agent_user
+from ..services import notifier
+
+logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
 
@@ -340,3 +345,77 @@ def assign_tenant(
     db.refresh(tenant)
 
     return _tenant_to_item(tenant, building.name)
+
+
+# --- Broadcast Notifications ---
+
+class BroadcastNotificationRequest(BaseModel):
+    building_id: int
+    block: Optional[str] = None
+    house_number: Optional[str] = None
+    message: str
+
+
+class BroadcastNotificationResponse(BaseModel):
+    total_tenants: int
+    sent: int
+    skipped: int
+    details: list[dict]
+
+
+@router.post("/notifications/broadcast", response_model=BroadcastNotificationResponse)
+def broadcast_notification(
+    body: BroadcastNotificationRequest,
+    current_user: models.User = Depends(get_agent_user),
+    db: Session = Depends(get_db),
+):
+    """Send a WhatsApp notification to all tenants in a building, optionally filtered by block and house_number."""
+    query = db.query(models.Building).filter(models.Building.id == body.building_id)
+    if body.block is not None:
+        query = query.filter(models.Building.block == body.block)
+    if body.house_number is not None:
+        query = query.filter(models.Building.house_number == body.house_number)
+
+    buildings = query.all()
+    if not buildings:
+        raise HTTPException(status_code=404, detail="No buildings found matching the criteria")
+
+    building_ids = [b.id for b in buildings]
+    tenants = (
+        db.query(models.Tenant)
+        .filter(models.Tenant.building_id.in_(building_ids))
+        .all()
+    )
+
+    if not tenants:
+        raise HTTPException(status_code=404, detail="No tenants found in the matching buildings")
+
+    sent = 0
+    skipped = 0
+    details = []
+    for t in tenants:
+        if not t.phone:
+            skipped += 1
+            details.append({"tenant": t.name, "status": "skipped", "reason": "no phone"})
+            continue
+        digits = notifier._normalize_phone(t.phone)
+        if not digits:
+            skipped += 1
+            details.append({"tenant": t.name, "status": "skipped", "reason": "invalid phone"})
+            continue
+        chat_id = f"{digits}@c.us"
+        notifier.send_whatsapp_reply(chat_id, body.message)
+        sent += 1
+        details.append({"tenant": t.name, "status": "sent"})
+
+    logger.info(
+        "Broadcast notification: building_id=%s block=%s house_number=%s — sent=%d skipped=%d",
+        body.building_id, body.block, body.house_number, sent, skipped,
+    )
+
+    return BroadcastNotificationResponse(
+        total_tenants=len(tenants),
+        sent=sent,
+        skipped=skipped,
+        details=details,
+    )

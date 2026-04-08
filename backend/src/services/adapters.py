@@ -59,13 +59,20 @@ _SCENARIO_TO_DB = {
 
 
 def _tenant_to_info(t: Tenant) -> TenantInfo:
+    b = t.building
     return TenantInfo(
         id=t.id,
         name=t.name,
         phone=t.phone,
-        building_name=t.building.name if t.building else "—",
+        building_name=b.name if b else "—",
         apartment=t.apartment or "—",
         agent_enabled=t.agent_enabled,
+        building_address=b.address or "" if b else "",
+        building_house_number=b.house_number or "" if b else "",
+        building_floor=b.floor or "" if b else "",
+        building_block=b.block or "" if b else "",
+        building_actual_number=b.actual_number or "" if b else "",
+        building_legal_number=b.legal_number or "" if b else "",
     )
 
 
@@ -425,10 +432,28 @@ class WhatsAppNotificationService:
         scheduled_time: str,
     ) -> bool:
         try:
-            fallback = (
-                f"🔧 *Новая заявка: {ticket_number}*\n\n"
-                f"*Жилец:* {tenant.name}\n"
-                f"*Адрес:* {tenant.building_name}, кв. {tenant.apartment}\n"
+            # Build address block from available fields
+            addr_parts = [tenant.building_name]
+            if tenant.building_address:
+                addr_parts.append(tenant.building_address)
+            addr_line = ", ".join(addr_parts)
+
+            detail_parts = []
+            if tenant.building_house_number:
+                detail_parts.append(f"дом {tenant.building_house_number}")
+            if tenant.building_block:
+                detail_parts.append(f"подъезд {tenant.building_block}")
+            if tenant.building_floor:
+                detail_parts.append(f"этаж {tenant.building_floor}")
+            detail_line = ", ".join(detail_parts)
+
+            fallback = f"🔧 *Новая заявка: {ticket_number}*\n\n"
+            fallback += f"*Жилец:* {tenant.name}\n"
+            fallback += f"*Адрес:* {addr_line}\n"
+            if detail_line:
+                fallback += f"*Дом:* {detail_line}\n"
+            fallback += f"*Квартира:* {tenant.apartment}\n"
+            fallback += (
                 f"*Проблема:* {description}\n"
                 f"*Категория:* {category}\n"
                 f"*Срочность:* {urgency}\n"
@@ -442,6 +467,16 @@ class WhatsAppNotificationService:
                 f"Technician name: {technician_name}\n"
                 f"Tenant name: {tenant.name}\n"
                 f"Building: {tenant.building_name}\n"
+            )
+            if tenant.building_address:
+                user_content += f"Address: {tenant.building_address}\n"
+            if tenant.building_house_number:
+                user_content += f"House number: {tenant.building_house_number}\n"
+            if tenant.building_block:
+                user_content += f"Block/Entrance: {tenant.building_block}\n"
+            if tenant.building_floor:
+                user_content += f"Floor: {tenant.building_floor}\n"
+            user_content += (
                 f"Apartment: {tenant.apartment}\n"
                 f"Problem: {description}\n"
                 f"Category: {category}\n"

@@ -168,14 +168,36 @@ def generate_technician_assignment_message(
     category: str,
     urgency: str,
     scheduled_time: str,
+    building_address: str = "",
+    building_house_number: str = "",
+    building_floor: str = "",
+    building_block: str = "",
 ) -> str:
     """Generate a technician assignment notification via GPT. Falls back to hardcoded template."""
     from .classifier import _get_client, _load_prompt
 
-    fallback = (
-        f"🔧 *Новая заявка: {ticket_number}*\n\n"
-        f"*Жилец:* {tenant_name}\n"
-        f"*Адрес:* {building_name}, кв. {apartment}\n"
+    # Build address block from available fields
+    addr_parts = [building_name]
+    if building_address:
+        addr_parts.append(building_address)
+    addr_line = ", ".join(addr_parts)
+
+    detail_parts = []
+    if building_house_number:
+        detail_parts.append(f"дом {building_house_number}")
+    if building_block:
+        detail_parts.append(f"подъезд {building_block}")
+    if building_floor:
+        detail_parts.append(f"этаж {building_floor}")
+    detail_line = ", ".join(detail_parts)
+
+    fallback = f"🔧 *Новая заявка: {ticket_number}*\n\n"
+    fallback += f"*Жилец:* {tenant_name}\n"
+    fallback += f"*Адрес:* {addr_line}\n"
+    if detail_line:
+        fallback += f"*Дом:* {detail_line}\n"
+    fallback += f"*Квартира:* {apartment}\n"
+    fallback += (
         f"*Проблема:* {description}\n"
         f"*Категория:* {category}\n"
         f"*Срочность:* {urgency}\n"
@@ -195,6 +217,16 @@ def generate_technician_assignment_message(
             f"Technician name: {technician_name}\n"
             f"Tenant name: {tenant_name}\n"
             f"Building: {building_name}\n"
+        )
+        if building_address:
+            user_content += f"Address: {building_address}\n"
+        if building_house_number:
+            user_content += f"House number: {building_house_number}\n"
+        if building_block:
+            user_content += f"Block/Entrance: {building_block}\n"
+        if building_floor:
+            user_content += f"Floor: {building_floor}\n"
+        user_content += (
             f"Apartment: {apartment}\n"
             f"Problem: {description}\n"
             f"Category: {category}\n"
