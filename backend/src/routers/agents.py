@@ -350,7 +350,7 @@ def assign_tenant(
 # --- Broadcast Notifications ---
 
 class BroadcastNotificationRequest(BaseModel):
-    building_id: int
+    building_name: str
     block: Optional[str] = None
     house_number: Optional[str] = None
     message: str
@@ -370,7 +370,9 @@ def broadcast_notification(
     db: Session = Depends(get_db),
 ):
     """Send a WhatsApp notification to all tenants in a building, optionally filtered by block and house_number."""
-    query = db.query(models.Building).filter(models.Building.id == body.building_id)
+    query = db.query(models.Building).filter(
+        func.lower(models.Building.name) == body.building_name.lower()
+    )
     if body.block is not None:
         query = query.filter(models.Building.block == body.block)
     if body.house_number is not None:
@@ -409,8 +411,8 @@ def broadcast_notification(
         details.append({"tenant": t.name, "status": "sent"})
 
     logger.info(
-        "Broadcast notification: building_id=%s block=%s house_number=%s — sent=%d skipped=%d",
-        body.building_id, body.block, body.house_number, sent, skipped,
+        "Broadcast notification: building_name=%s block=%s house_number=%s — sent=%d skipped=%d",
+        body.building_name, body.block, body.house_number, sent, skipped,
     )
 
     return BroadcastNotificationResponse(

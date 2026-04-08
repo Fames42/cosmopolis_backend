@@ -783,19 +783,19 @@ Send a WhatsApp notification to all tenants in a building, optionally filtered b
 **Request body:**
 ```json
 {
-  "building_id": 1,
+  "building_name": "ESENTAI APARTMENTS A",
   "block": "А",
   "house_number": "77/1",
   "message": "Уважаемые жильцы, завтра будет отключена вода с 10:00 до 14:00."
 }
 ```
 
-| Field          | Type   | Required | Description                          |
-|----------------|--------|----------|--------------------------------------|
-| `building_id`  | int    | Yes      | Building to target                   |
-| `block`        | string | No       | Filter by block (exact match)        |
-| `house_number` | string | No       | Filter by house number (exact match) |
-| `message`      | string | Yes      | Notification text to send            |
+| Field           | Type   | Required | Description                                    |
+|-----------------|--------|----------|------------------------------------------------|
+| `building_name` | string | Yes      | Building name (case-insensitive match)         |
+| `block`         | string | No       | Filter by block (exact match)                  |
+| `house_number`  | string | No       | Filter by house number (exact match)           |
+| `message`       | string | Yes      | Notification text to send                      |
 
 **Response:**
 ```json
