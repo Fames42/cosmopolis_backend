@@ -653,6 +653,46 @@ All fields except `name` and `address` are optional.
 
 ---
 
+### `GET /api/agents/buildings/names`
+
+List distinct building names with total tenant counts. Useful for populating dropdowns (e.g. broadcast notification target).
+
+**Auth:** Admin or Agent
+
+**Response:**
+```json
+[
+  { "name": "ESENTAI APARTMENTS A", "tenant_count": 12 },
+  { "name": "ESENTAI APARTMENTS B", "tenant_count": 8 }
+]
+```
+
+---
+
+### `GET /api/agents/buildings/filters`
+
+Return available blocks and house numbers for a given building name. Useful for populating filter dropdowns after selecting a building.
+
+**Auth:** Admin or Agent
+
+| Param           | Type   | Required | Description            |
+|-----------------|--------|----------|------------------------|
+| `building_name` | string | Yes      | Building name to query |
+
+**Example:** `GET /api/agents/buildings/filters?building_name=ESENTAI APARTMENTS A`
+
+**Response:**
+```json
+{
+  "blocks": ["А", "Б"],
+  "house_numbers": ["77/1", "77/2"]
+}
+```
+
+**Errors:** `404` if no buildings found with this name.
+
+---
+
 ### `GET /api/agents/tenants`
 
 List all tenants with building info.

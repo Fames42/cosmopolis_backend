@@ -103,6 +103,16 @@ class TenantAssignRequest(BaseModel):
     building_id: int
 
 
+class BuildingNameItem(BaseModel):
+    name: str
+    tenant_count: int
+
+
+class BuildingFiltersResponse(BaseModel):
+    blocks: list[str]
+    house_numbers: list[str]
+
+
 # --- Buildings ---
 
 @router.get("/buildings", response_model=list[BuildingListItem])
@@ -171,6 +181,46 @@ def create_building(
         actual_number=building.actual_number,
         tenant_count=0,
     )
+
+
+@router.get("/buildings/names", response_model=list[BuildingNameItem])
+def list_building_names(
+    current_user: models.User = Depends(get_agent_user),
+    db: Session = Depends(get_db),
+):
+    """Return distinct building names with total tenant counts."""
+    rows = (
+        db.query(
+            models.Building.name,
+            func.count(models.Tenant.id).label("tenant_count"),
+        )
+        .outerjoin(models.Tenant, models.Tenant.building_id == models.Building.id)
+        .group_by(models.Building.name)
+        .order_by(models.Building.name)
+        .all()
+    )
+    return [BuildingNameItem(name=r.name, tenant_count=r.tenant_count) for r in rows]
+
+
+@router.get("/buildings/filters", response_model=BuildingFiltersResponse)
+def get_building_filters(
+    building_name: str,
+    current_user: models.User = Depends(get_agent_user),
+    db: Session = Depends(get_db),
+):
+    """Return available blocks and house numbers for a given building name."""
+    buildings = (
+        db.query(models.Building.block, models.Building.house_number)
+        .filter(func.lower(models.Building.name) == building_name.lower())
+        .all()
+    )
+    if not buildings:
+        raise HTTPException(status_code=404, detail="No buildings found with this name")
+
+    blocks = sorted({b.block for b in buildings if b.block})
+    house_numbers = sorted({b.house_number for b in buildings if b.house_number})
+
+    return BuildingFiltersResponse(blocks=blocks, house_numbers=house_numbers)
 
 
 def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> TenantListItem:
