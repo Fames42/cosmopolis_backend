@@ -14,7 +14,7 @@ from backend.src.agent.context import ConversationContext
 from backend.src.agent.engine import AgentEngine
 from backend.src.agent.types import ConversationSnapshot, ConversationState, TenantInfo
 from backend.src.routers.webhook import greenapi_webhook
-from backend.src.services.adapters import SqlConversationStore
+from backend.src.services.adapters import SqlConversationStore, WhatsAppNotificationService
 from backend.src.services.buffer import BufferedMessage, MessageBuffer
 from backend.src.routers.technicians import require_self_technician
 
@@ -289,6 +289,74 @@ class OperatorPauseAgentTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertNotIn("operator_paused_until", ctx.context_data)
         self.assertEqual(len(store.updated), 1)
+
+
+class CapturingMessageLLM:
+    def __init__(self):
+        self.calls = []
+
+    def generate_message(self, prompt_name, user_content, fallback):
+        self.calls.append((prompt_name, user_content, fallback))
+        return "Сообщение технику на русском языке"
+
+
+class TechnicianAssignmentLanguageTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        self.db = session_factory()
+        self.db.add(models.User(
+            id="tech-1",
+            name="Almat",
+            email="almat@example.com",
+            phone="+77770000000",
+            password_hash="x",
+            role=models.RoleEnum.technician,
+        ))
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_technician_assignment_forces_russian_output(self):
+        llm = CapturingMessageLLM()
+        service = WhatsAppNotificationService(self.db, llm)
+        tenant = TenantInfo(
+            id=1,
+            name="John",
+            phone="77700000000",
+            building_name="Esentai",
+            apartment="12",
+            agent_enabled=True,
+            building_address="Main street",
+            building_house_number="5",
+            building_floor="3",
+            building_block="A",
+        )
+
+        with patch("backend.src.services.adapters.notifier_mod.send_whatsapp_reply") as send_reply:
+            sent = service.notify_technician_assigned(
+                technician_name="Almat",
+                ticket_number="TKT-12345678",
+                tenant=tenant,
+                description="Kitchen sink is leaking badly",
+                category="plumbing",
+                urgency="high",
+                scheduled_time="2026-05-17T15:00:00+05:00",
+            )
+
+        self.assertTrue(sent)
+        self.assertEqual(llm.calls[0][0], "technician_assignment")
+        user_content = llm.calls[0][1]
+        self.assertIn("ONLY in Russian", user_content)
+        self.assertIn("Translate all tenant-provided text", user_content)
+        self.assertIn("Kitchen sink is leaking badly", user_content)
+        send_reply.assert_called_once_with("77770000000@c.us", "Сообщение технику на русском языке")
 
 
 if __name__ == "__main__":

@@ -212,6 +212,10 @@ def generate_technician_assignment_message(
             return fallback
 
         user_content = (
+            "OUTPUT LANGUAGE REQUIREMENT:\n"
+            "Write the final WhatsApp notification ONLY in Russian.\n"
+            "Translate all tenant-provided text, including the problem description, into Russian.\n"
+            "Do not mirror the tenant's language.\n\n"
             f"TICKET DETAILS:\n"
             f"Ticket number: {ticket_number}\n"
             f"Technician name: {technician_name}\n"
