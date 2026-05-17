@@ -152,12 +152,20 @@ class SqlConversationStore:
         query = self.db.query(Message).filter(Message.conversation_id == conversation_id)
         if since:
             query = query.filter(Message.created_at >= since)
-        messages = query.order_by(Message.created_at.asc()).limit(20).all()
+        messages = (
+            query
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(20)
+            .all()
+        )
+        messages.reverse()
         result = []
         for m in messages:
             role = "tenant" if m.sender == MessageSenderEnum.tenant else "ai"
-            if m.content:
-                result.append(HistoryMessage(role=role, content=m.content))
+            has_image = m.message_type in (MessageTypeEnum.image, MessageTypeEnum.mixed)
+            content = m.content or ("[Фото]" if has_image else "")
+            if content:
+                result.append(HistoryMessage(role=role, content=content, has_image=has_image))
         return result
 
     def save_message(
@@ -178,6 +186,36 @@ class SqlConversationStore:
         )
         self.db.add(msg)
         self.db.commit()
+
+    def pause_for_operator(
+        self,
+        phone: str,
+        content: str,
+        paused_until: datetime,
+        reason: str,
+    ) -> bool:
+        tenant = self.find_tenant_by_phone(phone)
+        if not tenant:
+            return False
+
+        chat_id = f"{_digits_only(phone)}@c.us"
+        snapshot = self.get_or_create_conversation(tenant.id, chat_id)
+        self.save_message(snapshot.id, "admin", content)
+
+        conv = self.db.query(Conversation).filter(Conversation.id == snapshot.id).first()
+        if not conv:
+            return False
+
+        now = datetime.now(timezone.utc)
+        context_data = dict(conv.context_data or {})
+        context_data.update({
+            "operator_pause_started_at": now.isoformat(),
+            "operator_paused_until": paused_until.isoformat(),
+            "operator_pause_reason": reason,
+        })
+        conv.context_data = context_data
+        self.db.commit()
+        return True
 
     def update_conversation(
         self, conversation_id: int, update: ConversationStateUpdate,

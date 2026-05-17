@@ -20,6 +20,7 @@ class BufferedMessage:
     phone: str
     content: str
     image_base64: str | None = None
+    send_reply: bool = True
 
 
 @dataclass
@@ -56,7 +57,12 @@ class MessageBuffer:
         finally:
             db.close()
 
-        buf.messages.append(BufferedMessage(phone=phone, content=content, image_base64=image_base64))
+        buf.messages.append(BufferedMessage(
+            phone=phone,
+            content=content,
+            image_base64=image_base64,
+            send_reply=True,
+        ))
         await self._schedule_flush(chat_id)
 
     async def add_message_and_wait(
@@ -79,7 +85,12 @@ class MessageBuffer:
         finally:
             db.close()
 
-        buf.messages.append(BufferedMessage(phone=phone, content=content, image_base64=image_base64))
+        buf.messages.append(BufferedMessage(
+            phone=phone,
+            content=content,
+            image_base64=image_base64,
+            send_reply=False,
+        ))
 
         loop = asyncio.get_running_loop()
         future: asyncio.Future[tuple[str, str, AgentResult | None]] = loop.create_future()
@@ -116,6 +127,7 @@ class MessageBuffer:
                 return
 
             phone = messages[0].phone
+            should_send_reply = any(m.send_reply for m in messages)
 
             try:
                 result = await asyncio.get_running_loop().run_in_executor(
@@ -136,7 +148,7 @@ class MessageBuffer:
 
             reply = result[0]
             state = result[1]
-            if reply and state not in ("unknown_tenant", "agent_disabled"):
+            if should_send_reply and reply and state not in ("unknown_tenant", "agent_disabled"):
                 send_whatsapp_reply(chat_id, reply)
 
         if buf.messages:

@@ -1,16 +1,45 @@
 import os
 import socket
 import logging
+from pathlib import Path
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import text
 
 from .routers import users, tickets, conversations, analytics, technicians, agents, webhook
 from .auth import router as auth_router
+from .database import engine
 
 logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="Cosmopolis Agent API")
+
+
+def log_alembic_state():
+    """Log migration state without mutating the production database."""
+    try:
+        project_root = Path(__file__).resolve().parents[1]
+        alembic_cfg = Config(str(project_root / "alembic.ini"))
+        alembic_cfg.set_main_option("script_location", str(project_root / "src" / "alembic"))
+        script = ScriptDirectory.from_config(alembic_cfg)
+        head_revision = script.get_current_head()
+
+        with engine.connect() as conn:
+            current_revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+
+        if current_revision == head_revision:
+            logger.info("Alembic revision is current: %s", current_revision)
+        else:
+            logger.warning(
+                "Alembic revision mismatch: database=%s code_head=%s",
+                current_revision or "none",
+                head_revision,
+            )
+    except Exception:
+        logger.exception("Could not read Alembic revision state")
 
 
 @app.on_event("startup")
@@ -28,6 +57,7 @@ def log_access_info():
     logger.info(f"Access:    http://{local_ip}:{port}")
     logger.info(f"Docs:      http://{local_ip}:{port}/docs")
     logger.info("=" * 50)
+    log_alembic_state()
 
 # Configure CORS
 app.add_middleware(

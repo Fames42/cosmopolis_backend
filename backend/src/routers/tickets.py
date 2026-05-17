@@ -9,7 +9,7 @@ from openpyxl.styles import Font
 
 from .. import models, schemas
 from ..database import get_db
-from ..auth import get_current_user, check_role
+from ..auth import get_dispatcher_user
 
 router = APIRouter()
 
@@ -71,7 +71,7 @@ def read_tickets(
     skip: int = 0, 
     limit: int = 100, 
     db: Session = Depends(get_db), 
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_dispatcher_user)
 ):
     tickets = db.query(models.Ticket).offset(skip).limit(limit).all()
     return [format_ticket_list(t) for t in tickets]
@@ -80,7 +80,7 @@ def read_tickets(
 def export_tickets(
     body: schemas.TicketExportRequest,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_dispatcher_user),
 ):
     tickets = (
         db.query(models.Ticket)
@@ -134,7 +134,7 @@ def export_tickets(
 def read_ticket(
     ticket_id: str, 
     db: Session = Depends(get_db), 
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_dispatcher_user)
 ):
     ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()
     if not ticket:
@@ -146,8 +146,12 @@ def read_ticket(
     
     return format_ticket_detail(ticket)
 
-@router.post("", response_model=schemas.TicketDispatcherDetailResponse, dependencies=[Depends(check_role([models.RoleEnum.admin, models.RoleEnum.dispatcher]))])
-def create_ticket(ticket: schemas.TicketCreate, db: Session = Depends(get_db)):
+@router.post("", response_model=schemas.TicketDispatcherDetailResponse)
+def create_ticket(
+    ticket: schemas.TicketCreate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_dispatcher_user),
+):
     import uuid
     db_ticket = models.Ticket(**ticket.model_dump(), ticket_number=f"TKT-{str(uuid.uuid4())[:8].upper()}")
     db.add(db_ticket)
@@ -160,7 +164,7 @@ def update_ticket(
     ticket_id: str, 
     ticket_update: dict,  
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_dispatcher_user)
 ):
     ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()
     if not ticket:
@@ -221,7 +225,7 @@ def add_note(
     ticket_id: str,
     note: schemas.NoteCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_dispatcher_user)
 ):
     ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()
     if not ticket:
@@ -253,7 +257,7 @@ def add_note(
 def get_ticket_photo(
     ticket_id: str,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user),
+    current_user: models.User = Depends(get_dispatcher_user),
 ):
     """Get photos attached to a ticket. Returns {photo_urls: ["data:image/...;base64,..."]} or 404."""
     ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()

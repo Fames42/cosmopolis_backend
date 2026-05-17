@@ -6,9 +6,14 @@ from datetime import datetime, timezone, date, timedelta
 
 from .. import models, schemas
 from ..database import get_db
-from ..auth import get_current_user, get_dispatcher_user, check_role
+from ..auth import get_current_user, get_admin_user, get_dispatcher_user
 
 router = APIRouter()
+
+
+def require_self_technician(current_user: models.User) -> None:
+    if current_user.role != models.RoleEnum.technician:
+        raise HTTPException(status_code=403, detail="Only technicians can access this resource")
 
 def format_tech_list(ticket: models.Ticket) -> schemas.TicketTechnicianListResponse:
     is_today = False
@@ -57,7 +62,7 @@ def format_tech_detail(ticket: models.Ticket) -> schemas.TicketTechnicianDetailR
 @router.get("", response_model=List[schemas.TechnicianResponse])
 def get_technicians(
     db: Session = Depends(get_db), 
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_dispatcher_user)
 ):
     # Single query: technicians + active ticket count via LEFT JOIN
     active_tickets_subq = (
@@ -126,7 +131,7 @@ def get_all_technician_schedules(
 def create_technician(
     tech: schemas.TechnicianCreate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_dispatcher_user)
 ):
     from ..auth import get_password_hash
     existing = db.query(models.User).filter(models.User.email == tech.email).first()
@@ -158,7 +163,7 @@ def update_technician(
     tech_id: str,
     tech_update: schemas.TechnicianUpdate,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_dispatcher_user)
 ):
     tech = db.query(models.User).filter(
         models.User.id == tech_id,
@@ -204,10 +209,8 @@ def update_technician(
 def delete_technician(
     tech_id: str,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(get_current_user)
+    current_user: models.User = Depends(get_admin_user)
 ):
-    if current_user.role != models.RoleEnum.admin:
-        raise HTTPException(status_code=403, detail="Only admins can delete technicians")
     tech = db.query(models.User).filter(
         models.User.id == tech_id,
         models.User.role == models.RoleEnum.technician,
@@ -237,6 +240,7 @@ def get_my_schedule(
     current_user: models.User = Depends(get_current_user),
 ):
     """Get the current technician's own weekly schedule."""
+    require_self_technician(current_user)
     schedules = (
         db.query(models.TechnicianSchedule)
         .filter(models.TechnicianSchedule.technician_id == current_user.id)
@@ -253,6 +257,7 @@ def set_my_schedule(
     current_user: models.User = Depends(get_current_user),
 ):
     """Bulk-replace the current technician's own weekly schedule."""
+    require_self_technician(current_user)
     db.query(models.TechnicianSchedule).filter(
         models.TechnicianSchedule.technician_id == current_user.id,
     ).delete()
@@ -380,6 +385,7 @@ def get_my_tickets(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_current_user)
 ):
+    require_self_technician(current_user)
     tickets = db.query(models.Ticket).filter(models.Ticket.assigned_to == current_user.id).all()
     return [format_tech_list(t) for t in tickets]
 
@@ -389,6 +395,7 @@ def get_my_ticket(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_current_user)
 ):
+    require_self_technician(current_user)
     ticket = db.query(models.Ticket).filter(
         models.Ticket.ticket_number == ticket_id,
         models.Ticket.assigned_to == current_user.id
@@ -413,6 +420,7 @@ def add_my_ticket_comment(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    require_self_technician(current_user)
     ticket = db.query(models.Ticket).filter(
         models.Ticket.ticket_number == ticket_id,
         models.Ticket.assigned_to == current_user.id
@@ -446,6 +454,7 @@ def update_my_ticket_status(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    require_self_technician(current_user)
     ticket = db.query(models.Ticket).filter(
         models.Ticket.ticket_number == ticket_id,
         models.Ticket.assigned_to == current_user.id

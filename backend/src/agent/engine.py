@@ -26,6 +26,11 @@ logger = logging.getLogger("uvicorn.error")
 TZ_ALMATY = timezone(timedelta(hours=5))
 
 ESCALATION_COOLDOWN_HOURS = 3
+OPERATOR_PAUSE_CONTEXT_KEYS = (
+    "operator_pause_started_at",
+    "operator_paused_until",
+    "operator_pause_reason",
+)
 
 # Tool name → state mapping for dashboard consistency
 TOOL_STATE_MAP = {
@@ -89,6 +94,18 @@ def _build_state_preamble(ctx: ConversationContext) -> str:
     return "\n".join(lines)
 
 
+def _parse_utc_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 # ── AgentEngine ──────────────────────────────────────────────────────────────
 
 class AgentEngine:
@@ -136,6 +153,21 @@ class AgentEngine:
             logger.info("Agent support disabled for tenant %s", ctx.tenant.id)
             return "", "agent_disabled", None
 
+        paused_until = _parse_utc_datetime(ctx.context_data.get("operator_paused_until"))
+        if paused_until:
+            now = datetime.now(timezone.utc)
+            if paused_until > now:
+                remaining = paused_until - now
+                logger.info(
+                    "Conversation %s is paused for operator response (%.1fm remaining)",
+                    ctx.conversation_id,
+                    remaining.total_seconds() / 60,
+                )
+                return "", "operator_paused", None
+            for key in OPERATOR_PAUSE_CONTEXT_KEYS:
+                ctx.context_data.pop(key, None)
+            self.store.update_conversation(ctx.conversation_id, ctx.to_state_update())
+
         # ── Check escalation state ──────────────────────────────────────
         if ctx.state == ConversationState.escalated_to_human:
             if ctx.escalated_at:
@@ -160,17 +192,28 @@ class AgentEngine:
             ctx.reopened_at = datetime.now(timezone.utc)
             self.store.update_conversation(ctx.conversation_id, ctx.to_state_update())
 
-        # ── Get last tenant message ──────────────────────────────────────
+        # ── Get tenant messages since last AI reply ─────────────────────
         history = self.store.get_message_history(ctx.conversation_id, since=ctx.reopened_at)
 
-        last_tenant_content = ""
+        # Collect all tenant messages after the last AI reply
+        tenant_messages = []
+        has_new_image = False
         for msg in reversed(history):
-            if msg.role == "tenant":
-                last_tenant_content = msg.content
+            if msg.role == "ai":
                 break
+            if msg.role == "tenant":
+                tenant_messages.append(msg.content)
+                if msg.has_image:
+                    has_new_image = True
+        tenant_messages.reverse()
+        last_tenant_content = "\n".join(tenant_messages) if tenant_messages else ""
 
         if not last_tenant_content:
             return "", ctx.state.value, None
+
+        # Auto-set photo_received when tenant sends an image
+        if has_new_image and not ctx.context_data.get("photo_received"):
+            ctx.update_context({"photo_received": True})
 
         # ── Build instructions with state preamble ───────────────────────
         state_preamble = _build_state_preamble(ctx)

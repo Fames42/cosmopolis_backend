@@ -1,16 +1,20 @@
 import base64
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter
 
+from ..database import SessionLocal
 from ..schemas import TestMessageRequest, TestMessageResponse
+from ..services.adapters import create_agent_engine
 from ..services.buffer import message_buffer
 
 logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
+OPERATOR_PAUSE_SECONDS = 60 * 60
 
 
 def _download_image_as_base64(download_url: str) -> str | None:
@@ -30,6 +34,34 @@ def _download_image_as_base64(download_url: str) -> str | None:
 def _phone_to_chat_id(phone: str) -> str:
     digits = re.sub(r"\D", "", phone)
     return f"{digits}@c.us"
+
+
+def _extract_message_text(message_data: dict) -> str:
+    msg_type = message_data.get("typeMessage", "")
+    if msg_type == "textMessage":
+        return message_data.get("textMessageData", {}).get("textMessage", "")
+    if msg_type == "extendedTextMessage":
+        return message_data.get("extendedTextMessageData", {}).get("text", "")
+    if msg_type == "imageMessage":
+        return message_data.get("fileMessageData", {}).get("caption", "") or "[Фото]"
+    if msg_type:
+        return f"[{msg_type}]"
+    return "[operator message]"
+
+
+def _pause_operator_chat(phone: str, content: str, reason: str) -> bool:
+    paused_until = datetime.now(timezone.utc) + timedelta(seconds=OPERATOR_PAUSE_SECONDS)
+    db = SessionLocal()
+    try:
+        engine = create_agent_engine(db)
+        return engine.store.pause_for_operator(
+            phone=phone,
+            content=content,
+            paused_until=paused_until,
+            reason=reason,
+        )
+    finally:
+        db.close()
 
 
 @router.post("/test", response_model=TestMessageResponse)
@@ -57,15 +89,17 @@ async def test_webhook(req: TestMessageRequest):
 
 @router.post("/greenapi")
 async def greenapi_webhook(request_body: dict):
-    """Receive incoming WhatsApp messages from Green API webhook.
+    """Receive WhatsApp tenant/operator events from Green API webhook.
 
-    Messages are buffered per chat for 15 seconds. After no new messages arrive
-    within that window, all buffered messages are processed together and a single
-    reply is sent back via WhatsApp.
+    Incoming tenant messages are buffered and processed by the agent. Outgoing
+    phone messages are treated as operator responses and pause the agent.
     """
     webhook_type = request_body.get("typeWebhook")
 
-    if webhook_type != "incomingMessageReceived":
+    if webhook_type == "outgoingAPIMessageReceived":
+        return {"status": "ignored", "type": webhook_type}
+
+    if webhook_type not in ("incomingMessageReceived", "outgoingMessageReceived"):
         return {"status": "ignored", "type": webhook_type}
 
     sender_data = request_body.get("senderData", {})
@@ -78,6 +112,15 @@ async def greenapi_webhook(request_body: dict):
 
     # Extract phone number from chat_id (e.g. "77762113673@c.us" → "77762113673")
     phone = chat_id.replace("@c.us", "")
+
+    if webhook_type == "outgoingMessageReceived":
+        text = _extract_message_text(message_data)
+        paused = _pause_operator_chat(phone, text, webhook_type)
+        if not paused:
+            logger.info("Ignoring operator message from non-tenant %s", phone)
+            return {"status": "ignored", "reason": "unknown_tenant"}
+        logger.info("Operator message paused agent for %s until +%ds", phone, OPERATOR_PAUSE_SECONDS)
+        return {"status": "ok", "operator_paused": True, "pause_seconds": OPERATOR_PAUSE_SECONDS}
 
     # Extract message text and optional image
     text = ""

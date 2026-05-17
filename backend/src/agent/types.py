@@ -60,6 +60,7 @@ class TenantInfo:
 class HistoryMessage:
     role: str   # "tenant" | "ai"
     content: str
+    has_image: bool = False
 
 
 @dataclass(frozen=True)
