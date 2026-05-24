@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 
 from ..database import SessionLocal
+from ..agent.engine import AUTO_GREETING_TEXT
 from ..agent.types import AgentResult
 from ..agent.context import ConversationContext
 from .adapters import create_agent_engine
@@ -50,7 +51,12 @@ class MessageBuffer:
         db = SessionLocal()
         try:
             engine = create_agent_engine(db)
-            tenant, snapshot, _ = engine.save_incoming_message(phone, content, image_base64=image_base64)
+            tenant, snapshot, _ = engine.save_incoming_message(
+                phone,
+                content,
+                image_base64=image_base64,
+                send_greeting=True,
+            )
             if not tenant:
                 logger.info("Ignoring message from non-tenant %s", phone)
                 return
@@ -73,15 +79,23 @@ class MessageBuffer:
 
         # Save to DB immediately
         db = SessionLocal()
+        greeting_text: str | None = None
         try:
             engine = create_agent_engine(db)
-            tenant, snapshot, _ = engine.save_incoming_message(phone, content, image_base64=image_base64)
+            tenant, snapshot, _ = engine.save_incoming_message(
+                phone,
+                content,
+                image_base64=image_base64,
+                send_greeting=False,
+            )
             if not tenant:
                 return (
                     "Извините, ваш номер не найден в системе. Обратитесь в управляющую компанию для регистрации.",
                     "unknown_tenant",
                     None,
                 )
+            if snapshot and getattr(snapshot, "_greeting_sent_now", False):
+                greeting_text = AUTO_GREETING_TEXT
         finally:
             db.close()
 
@@ -98,7 +112,10 @@ class MessageBuffer:
 
         await self._schedule_flush(chat_id)
 
-        return await future
+        reply, state, agent_response = await future
+        if greeting_text:
+            reply = f"{greeting_text}\n\n{reply}" if reply else greeting_text
+        return reply, state, agent_response
 
     async def _schedule_flush(self, chat_id: str) -> None:
         buf = self._get_buffer(chat_id)

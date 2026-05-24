@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import AliasChoices, BaseModel, EmailStr, Field
 from typing import Optional, List, Any
 from datetime import datetime
 from uuid import UUID
@@ -175,12 +175,16 @@ class TicketBase(BaseModel):
     urgency: str
     description: str
     photo_urls: Optional[List[str]] = None
-    availability_time: str
+    availability_time: Optional[str] = None
     status: TicketStatusEnum = TicketStatusEnum.new
     scheduled_time: Optional[datetime] = None
 
 class TicketCreate(TicketBase):
     tenant_id: int
+    assigned_to: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("assigned_to", "assignedTo"),
+    )
 
 class TicketUpdate(BaseModel):
     category: Optional[str] = None
@@ -189,8 +193,10 @@ class TicketUpdate(BaseModel):
     photo_urls: Optional[List[str]] = None
     availability_time: Optional[str] = None
     assigned_to: Optional[str] = None
+    assignedTo: Optional[str] = None
     status: Optional[TicketStatusEnum] = None
     scheduled_time: Optional[datetime] = None
+    scheduledDate: Optional[datetime] = None
 
 class TicketResponse(TicketBase):
     id: int
@@ -238,6 +244,8 @@ class TicketDispatcherListResponse(BaseModel):
     category: str
     urgency: str
     tenant: str
+    tenantName: Optional[str] = None
+    tenantId: Optional[int] = None
     assignedTo: Optional[str] = None
     status: str
     scheduled: Optional[str] = None

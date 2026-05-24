@@ -129,7 +129,7 @@ class SqlConversationStore:
                 conv.state = ConversationStateEnum.new_conversation
                 conv.scenario = None
                 conv.classifier_confidence = None
-                conv.context_data = {}
+                conv.context_data = {"_pending_greeting": True}
                 conv.reopened_at = datetime.now(timezone.utc)
                 self.db.commit()
                 self.db.refresh(conv)
@@ -140,6 +140,7 @@ class SqlConversationStore:
             whatsapp_chat_id=chat_id,
             status=ConversationStatusEnum.open,
             state=ConversationStateEnum.new_conversation,
+            context_data={"_pending_greeting": True},
         )
         self.db.add(conv)
         self.db.commit()

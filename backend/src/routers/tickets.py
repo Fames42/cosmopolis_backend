@@ -1,8 +1,10 @@
 from io import BytesIO
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy import case
+from sqlalchemy.orm import Session, joinedload
 from typing import List
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -12,6 +14,33 @@ from ..database import get_db
 from ..auth import get_dispatcher_user
 
 router = APIRouter()
+
+
+def _parse_datetime(value: str | None, field_name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid date format: {value}") from None
+
+
+def _find_technician(db: Session, identifier: str) -> models.User:
+    user = (
+        db.query(models.User)
+        .filter(models.User.id == identifier, models.User.role == models.RoleEnum.technician)
+        .first()
+    )
+    if not user:
+        user = (
+            db.query(models.User)
+            .filter(models.User.name == identifier, models.User.role == models.RoleEnum.technician)
+            .first()
+        )
+    if not user:
+        raise HTTPException(status_code=400, detail="Assigned technician not found")
+    return user
+
 
 def format_ticket_list(ticket: models.Ticket) -> schemas.TicketDispatcherListResponse:
     if ticket.tenant:
@@ -26,6 +55,8 @@ def format_ticket_list(ticket: models.Ticket) -> schemas.TicketDispatcherListRes
         category=ticket.category or "General",
         urgency=ticket.urgency or "LOW",
         tenant=tenant_str,
+        tenantName=ticket.tenant.name if ticket.tenant else None,
+        tenantId=ticket.tenant.id if ticket.tenant else None,
         assignedTo=assigned_to_name,
         status=ticket.status.value.upper() if ticket.status else "NEW",
         scheduled=ticket.scheduled_time.isoformat() if ticket.scheduled_time else None,
@@ -73,7 +104,21 @@ def read_tickets(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_dispatcher_user)
 ):
-    tickets = db.query(models.Ticket).offset(skip).limit(limit).all()
+    tickets = (
+        db.query(models.Ticket)
+        .options(
+            joinedload(models.Ticket.tenant).joinedload(models.Tenant.building),
+            joinedload(models.Ticket.assignee),
+        )
+        .order_by(
+            case((models.Ticket.scheduled_time.is_(None), 1), else_=0),
+            models.Ticket.scheduled_time.asc(),
+            models.Ticket.created_at.desc(),
+        )
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
     return [format_ticket_list(t) for t in tickets]
 
 @router.post("/export")
@@ -153,7 +198,15 @@ def create_ticket(
     current_user: models.User = Depends(get_dispatcher_user),
 ):
     import uuid
-    db_ticket = models.Ticket(**ticket.model_dump(), ticket_number=f"TKT-{str(uuid.uuid4())[:8].upper()}")
+    data = ticket.model_dump()
+    assigned_to = data.pop("assigned_to", None)
+    if assigned_to:
+        assignee = _find_technician(db, assigned_to)
+        data["assigned_to"] = assignee.id
+        if data.get("status") == models.TicketStatusEnum.new:
+            data["status"] = models.TicketStatusEnum.assigned
+
+    db_ticket = models.Ticket(**data, ticket_number=f"TKT-{str(uuid.uuid4())[:8].upper()}")
     db.add(db_ticket)
     db.commit()
     db.refresh(db_ticket)
@@ -181,30 +234,18 @@ def update_ticket(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid status: {ticket_update['status']}")
     
-    if "assignedTo" in ticket_update:
-        assignee_name = ticket_update["assignedTo"]
-        if assignee_name:
-            user = db.query(models.User).filter(models.User.name == assignee_name).first()
-            if user:
-                ticket.assigned_to = user.id
-            else:
-                 user = db.query(models.User).filter(models.User.id == assignee_name).first()
-                 if user:
-                     ticket.assigned_to = user.id
+    assignee_value = ticket_update.get("assignedTo", ticket_update.get("assigned_to"))
+    if "assignedTo" in ticket_update or "assigned_to" in ticket_update:
+        if assignee_value:
+            ticket.assigned_to = _find_technician(db, assignee_value).id
+            if ticket.status == models.TicketStatusEnum.new:
+                ticket.status = models.TicketStatusEnum.assigned
         else:
             ticket.assigned_to = None
             
-    if "scheduledDate" in ticket_update:
-        from datetime import datetime
-        try:
-            date_str = ticket_update["scheduledDate"]
-            if date_str:
-                date_str = date_str.replace("Z", "+00:00")
-                ticket.scheduled_time = datetime.fromisoformat(date_str)
-            else:
-                ticket.scheduled_time = None
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid date format: {ticket_update['scheduledDate']}")
+    scheduled_value = ticket_update.get("scheduledDate", ticket_update.get("scheduled_time"))
+    if "scheduledDate" in ticket_update or "scheduled_time" in ticket_update:
+        ticket.scheduled_time = _parse_datetime(scheduled_value, "scheduled_time")
 
     if "urgency" in ticket_update:
         allowed = {"low", "medium", "high", "emergency"}
@@ -215,6 +256,15 @@ def update_ticket(
                 detail=f"Invalid urgency: {ticket_update['urgency']}. Allowed: {', '.join(allowed)}",
             )
         ticket.urgency = urgency_str
+
+    if "description" in ticket_update:
+        ticket.description = ticket_update["description"] or ""
+
+    if "category" in ticket_update:
+        ticket.category = ticket_update["category"]
+
+    if "availability_time" in ticket_update:
+        ticket.availability_time = ticket_update["availability_time"]
 
     db.commit()
     db.refresh(ticket)

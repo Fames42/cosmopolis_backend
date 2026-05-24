@@ -113,6 +113,17 @@ class BuildingFiltersResponse(BaseModel):
     house_numbers: list[str]
 
 
+class BuildingTicketHistoryItem(BaseModel):
+    id: str
+    tenantName: str | None = None
+    tenantId: int | None = None
+    apartment: str | None = None
+    category: str
+    status: str
+    created: str
+    scheduled: str | None = None
+
+
 # --- Buildings ---
 
 @router.get("/buildings", response_model=list[BuildingListItem])
@@ -221,6 +232,39 @@ def get_building_filters(
     house_numbers = sorted({b.house_number for b in buildings if b.house_number})
 
     return BuildingFiltersResponse(blocks=blocks, house_numbers=house_numbers)
+
+
+@router.get("/buildings/{building_id}/tickets", response_model=list[BuildingTicketHistoryItem])
+def get_building_tickets(
+    building_id: int,
+    current_user: models.User = Depends(get_agent_user),
+    db: Session = Depends(get_db),
+):
+    building = db.query(models.Building).filter(models.Building.id == building_id).first()
+    if not building:
+        raise HTTPException(status_code=404, detail="Building not found")
+
+    tickets = (
+        db.query(models.Ticket)
+        .join(models.Tenant, models.Ticket.tenant_id == models.Tenant.id)
+        .filter(models.Tenant.building_id == building_id)
+        .order_by(models.Ticket.created_at.desc())
+        .all()
+    )
+
+    return [
+        BuildingTicketHistoryItem(
+            id=t.ticket_number,
+            tenantName=t.tenant.name if t.tenant else None,
+            tenantId=t.tenant.id if t.tenant else None,
+            apartment=t.tenant.apartment if t.tenant else None,
+            category=t.category or "General",
+            status=t.status.value.upper() if t.status else "NEW",
+            created=t.created_at.isoformat() if t.created_at else "",
+            scheduled=t.scheduled_time.isoformat() if t.scheduled_time else None,
+        )
+        for t in tickets
+    ]
 
 
 def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> TenantListItem:

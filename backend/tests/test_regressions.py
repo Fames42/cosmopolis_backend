@@ -8,15 +8,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.src import models
+from backend.src import models, schemas
 from backend.src.database import Base
 from backend.src.agent.context import ConversationContext
-from backend.src.agent.engine import AgentEngine
+from backend.src.agent.engine import AUTO_GREETING_TEXT, AgentEngine
 from backend.src.agent.types import ConversationSnapshot, ConversationState, TenantInfo
 from backend.src.routers.webhook import greenapi_webhook
 from backend.src.services.adapters import SqlConversationStore, WhatsAppNotificationService
 from backend.src.services.buffer import BufferedMessage, MessageBuffer
 from backend.src.routers.technicians import require_self_technician
+from backend.src.routers import agents as agents_router
+from backend.src.routers import tickets as tickets_router
 
 
 class ConversationHistoryTests(unittest.TestCase):
@@ -357,6 +359,203 @@ class TechnicianAssignmentLanguageTests(unittest.TestCase):
         self.assertIn("Translate all tenant-provided text", user_content)
         self.assertIn("Kitchen sink is leaking badly", user_content)
         send_reply.assert_called_once_with("77770000000@c.us", "Сообщение технику на русском языке")
+
+
+class TicketApiRegressionTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        self.db = session_factory()
+        self.dispatcher = models.User(
+            id="dispatcher-1",
+            name="Dispatcher",
+            email="dispatcher@example.com",
+            password_hash="x",
+            role=models.RoleEnum.dispatcher,
+        )
+        self.agent = models.User(
+            id="agent-1",
+            name="Agent",
+            email="agent@example.com",
+            password_hash="x",
+            role=models.RoleEnum.agent,
+        )
+        self.tech = models.User(
+            id="tech-1",
+            name="Technician One",
+            email="tech@example.com",
+            password_hash="x",
+            role=models.RoleEnum.technician,
+        )
+        self.building = models.Building(id=1, name="Building A", address="Main")
+        other_building = models.Building(id=2, name="Building B", address="Side")
+        self.tenant = models.Tenant(id=1, name="Alice Tenant", phone="77700000001", apartment="10", building_id=1)
+        other_tenant = models.Tenant(id=2, name="Bob Tenant", phone="77700000002", apartment="20", building_id=2)
+        self.db.add_all([
+            self.dispatcher, self.agent, self.tech,
+            self.building, other_building, self.tenant, other_tenant,
+        ])
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def _add_ticket(
+        self,
+        number: str,
+        tenant_id: int,
+        created_at: datetime,
+        scheduled_time: datetime | None = None,
+    ) -> models.Ticket:
+        ticket = models.Ticket(
+            ticket_number=number,
+            tenant_id=tenant_id,
+            category="Plumbing",
+            urgency="LOW",
+            description=number,
+            availability_time=None,
+            status=models.TicketStatusEnum.new,
+            scheduled_time=scheduled_time,
+            created_at=created_at,
+        )
+        self.db.add(ticket)
+        self.db.commit()
+        self.db.refresh(ticket)
+        return ticket
+
+    def test_ticket_list_sorts_by_scheduled_time_and_exposes_tenant_name(self):
+        base = datetime(2026, 5, 17, 8, tzinfo=timezone.utc)
+        self._add_ticket("TKT-NO-DATE", 1, base + timedelta(hours=3), None)
+        self._add_ticket("TKT-LATE", 1, base + timedelta(hours=2), base + timedelta(days=2))
+        self._add_ticket("TKT-EARLY", 1, base + timedelta(hours=1), base + timedelta(days=1))
+
+        result = tickets_router.read_tickets(db=self.db, current_user=self.dispatcher)
+
+        self.assertEqual([t.id for t in result], ["TKT-EARLY", "TKT-LATE", "TKT-NO-DATE"])
+        self.assertEqual(result[0].tenantName, "Alice Tenant")
+        self.assertEqual(result[0].tenantId, 1)
+
+    def test_create_ticket_accepts_missing_availability_and_assigns_technician(self):
+        body = schemas.TicketCreate(
+            tenant_id=1,
+            category="Plumbing",
+            urgency="medium",
+            description="Leak",
+            assigned_to="tech-1",
+        )
+
+        result = tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
+
+        ticket = self.db.query(models.Ticket).filter(models.Ticket.ticket_number == result.id).one()
+        self.assertIsNone(ticket.availability_time)
+        self.assertEqual(ticket.assigned_to, "tech-1")
+        self.assertEqual(ticket.status, models.TicketStatusEnum.assigned)
+
+    def test_update_ticket_changes_description(self):
+        self._add_ticket("TKT-DESC", 1, datetime(2026, 5, 17, tzinfo=timezone.utc))
+
+        result = tickets_router.update_ticket(
+            "TKT-DESC",
+            {"description": "Updated description"},
+            db=self.db,
+            current_user=self.dispatcher,
+        )
+
+        self.assertEqual(result.issueDetails.description, "Updated description")
+        ticket = self.db.query(models.Ticket).filter(models.Ticket.ticket_number == "TKT-DESC").one()
+        self.assertEqual(ticket.description, "Updated description")
+
+    def test_building_ticket_history_is_scoped_to_building(self):
+        base = datetime(2026, 5, 17, 8, tzinfo=timezone.utc)
+        self._add_ticket("TKT-A-OLD", 1, base)
+        self._add_ticket("TKT-A-NEW", 1, base + timedelta(hours=1))
+        self._add_ticket("TKT-B", 2, base + timedelta(hours=2))
+
+        result = agents_router.get_building_tickets(1, current_user=self.agent, db=self.db)
+
+        self.assertEqual([t.id for t in result], ["TKT-A-NEW", "TKT-A-OLD"])
+        self.assertEqual(result[0].tenantName, "Alice Tenant")
+        self.assertEqual(result[0].apartment, "10")
+
+
+class CapturingNotifier:
+    def __init__(self):
+        self.replies = []
+
+    def send_reply(self, chat_id, text):
+        self.replies.append((chat_id, text))
+
+    def escalate(self, *args, **kwargs):
+        pass
+
+    def notify_technician_assigned(self, *args, **kwargs):
+        return True
+
+
+class AutoGreetingTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        self.db = session_factory()
+        self.db.add(models.Tenant(
+            id=1,
+            name="Tenant",
+            phone="77700000000",
+            apartment="1",
+            agent_enabled=True,
+        ))
+        self.db.commit()
+        self.notifier = CapturingNotifier()
+        self.engine = AgentEngine(
+            store=SqlConversationStore(self.db),
+            scheduler=None,
+            notifier=self.notifier,
+            llm=FailingLLM(),
+        )
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_greeting_is_saved_and_sent_once_for_new_open_conversation(self):
+        tenant, snapshot, chat_id = self.engine.save_incoming_message("77700000000", "Hello")
+
+        self.assertIsNotNone(tenant)
+        self.assertEqual(chat_id, "77700000000@c.us")
+        self.assertTrue(getattr(snapshot, "_greeting_sent_now", False))
+        self.assertEqual(self.notifier.replies, [("77700000000@c.us", AUTO_GREETING_TEXT)])
+        messages = self.db.query(models.Message).order_by(models.Message.id.asc()).all()
+        self.assertEqual([m.sender for m in messages], [models.MessageSenderEnum.ai, models.MessageSenderEnum.tenant])
+        self.assertEqual(messages[0].content, AUTO_GREETING_TEXT)
+
+        self.engine.save_incoming_message("77700000000", "Second")
+
+        self.assertEqual(len(self.notifier.replies), 1)
+        ai_count = self.db.query(models.Message).filter(models.Message.sender == models.MessageSenderEnum.ai).count()
+        self.assertEqual(ai_count, 1)
+
+    def test_greeting_is_sent_after_reopen_once(self):
+        self.engine.save_incoming_message("77700000000", "Hello")
+        conversation = self.db.query(models.Conversation).one()
+        conversation.status = models.ConversationStatusEnum.closed
+        self.db.commit()
+
+        tenant, snapshot, _ = self.engine.save_incoming_message("77700000000", "Again")
+
+        self.assertIsNotNone(tenant)
+        self.assertTrue(getattr(snapshot, "_greeting_sent_now", False))
+        self.assertEqual(len(self.notifier.replies), 2)
+        ai_count = self.db.query(models.Message).filter(models.Message.sender == models.MessageSenderEnum.ai).count()
+        self.assertEqual(ai_count, 2)
 
 
 if __name__ == "__main__":

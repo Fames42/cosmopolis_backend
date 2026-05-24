@@ -47,6 +47,12 @@ TOOL_STATE_MAP = {
 }
 
 MAX_TOOL_ROUNDS = 8
+AUTO_GREETING_TEXT = (
+    "Здравствуйте! Это бот управляющей компании Cosmopolis. Опишите ваш вопрос или заявку, "
+    "и я помогу передать её в работу.\n\n"
+    "Hello! This is the Cosmopolis property management bot. Please describe your question or "
+    "service request, and I will help submit it."
+)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -130,7 +136,11 @@ class AgentEngine:
                 self._agent_prompt = agent_prompt_path.read_text(encoding="utf-8")
 
     def save_incoming_message(
-        self, phone: str, content: str, image_base64: str | None = None,
+        self,
+        phone: str,
+        content: str,
+        image_base64: str | None = None,
+        send_greeting: bool = True,
     ) -> tuple[TenantInfo | None, ConversationSnapshot | None, str]:
         """Save an incoming tenant message to DB without processing it."""
         tenant = self.store.find_tenant_by_phone(phone)
@@ -139,6 +149,25 @@ class AgentEngine:
 
         chat_id = f"{_digits_only(phone)}@c.us"
         snapshot = self.store.get_or_create_conversation(tenant.id, chat_id)
+        if (
+            tenant.agent_enabled
+            and snapshot.context_data.get("_pending_greeting")
+            and not snapshot.context_data.get("greeting_sent")
+        ):
+            self.store.save_message(snapshot.id, "ai", AUTO_GREETING_TEXT)
+            if send_greeting:
+                self.notifier.send_reply(chat_id, AUTO_GREETING_TEXT)
+            context_data = dict(snapshot.context_data)
+            context_data.pop("_pending_greeting", None)
+            context_data["greeting_sent"] = True
+            context_data["greeting_sent_at"] = datetime.now(timezone.utc).isoformat()
+            self.store.update_conversation(
+                snapshot.id,
+                ConversationStateUpdate(context_data=context_data),
+            )
+            snapshot.context_data = context_data
+            setattr(snapshot, "_greeting_sent_now", True)
+
         self.store.save_message(snapshot.id, "tenant", content, image_base64=image_base64)
 
         return tenant, snapshot, chat_id
