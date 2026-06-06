@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -23,6 +23,8 @@ from backend.src.agent.types import (
 from backend.src.routers.webhook import greenapi_webhook
 from backend.src.services.adapters import SqlConversationStore, SqlSchedulingService, WhatsAppNotificationService
 from backend.src.services.buffer import BufferedMessage, MessageBuffer
+from backend.src.services import images as image_service
+from backend.src.services import reminders as reminder_service
 from backend.src.services import scheduler as scheduler_mod
 from backend.src.routers.technicians import require_self_technician
 from backend.src.routers import agents as agents_router
@@ -138,6 +140,21 @@ class ConversationHistoryTests(unittest.TestCase):
         self.assertEqual(snapshot.state, ConversationState.service_scheduling)
         self.assertEqual(snapshot.context_data["response_id"], "resp_recent")
         self.assertEqual(snapshot.context_data["problem"], "recent leak")
+
+
+class ImageHelperTests(unittest.TestCase):
+    def test_bytes_to_data_uri_accepts_supported_images(self):
+        result = image_service.bytes_to_data_uri(b"image-bytes", "image/jpeg")
+
+        self.assertEqual(result, "data:image/jpeg;base64,aW1hZ2UtYnl0ZXM=")
+
+    def test_bytes_to_data_uri_rejects_invalid_content_type(self):
+        with self.assertRaises(image_service.ImageValidationError):
+            image_service.bytes_to_data_uri(b"not-image", "text/plain")
+
+    def test_bytes_to_data_uri_rejects_oversized_images(self):
+        with self.assertRaises(image_service.ImageValidationError):
+            image_service.bytes_to_data_uri(b"x" * (image_service.MAX_IMAGE_BYTES + 1), "image/png")
 
 
 class BufferTests(unittest.IsolatedAsyncioTestCase):
@@ -277,6 +294,37 @@ class OperatorPauseWebhookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "ignored")
         self.assertEqual(response["reason"], "group_chat")
         self.assertEqual(self.db.query(models.Conversation).count(), 0)
+
+    async def test_incoming_image_message_uses_shared_image_helper(self):
+        body = {
+            "typeWebhook": "incomingMessageReceived",
+            "senderData": {"chatId": "77700000000@c.us"},
+            "messageData": {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "caption": "Leak photo",
+                    "downloadUrl": "https://example.test/photo.jpg",
+                },
+            },
+        }
+
+        with (
+            patch(
+                "backend.src.routers.webhook.images.download_url_to_data_uri",
+                return_value="data:image/jpeg;base64,abc",
+            ) as download,
+            patch("backend.src.routers.webhook.message_buffer.add_message", new_callable=AsyncMock) as add_message,
+        ):
+            response = await greenapi_webhook(body)
+
+        self.assertEqual(response["status"], "ok")
+        download.assert_called_once_with("https://example.test/photo.jpg")
+        add_message.assert_awaited_once_with(
+            chat_id="77700000000@c.us",
+            phone="77700000000",
+            content="Leak photo",
+            image_base64="data:image/jpeg;base64,abc",
+        )
 
 
 class FakeStore:
@@ -896,6 +944,107 @@ class TicketApiRegressionTests(unittest.TestCase):
         self.assertEqual([ticket.ticket_number for ticket in workload.tickets], ["TKT-ACTIVE-WORKLOAD"])
         tech = next(item for item in techs if item["id"] == "tech-1")
         self.assertEqual(tech["activeTickets"], 1)
+
+    def test_append_ticket_photo_data_urls_preserves_existing_photos(self):
+        ticket = self._add_ticket("TKT-PHOTO-UPLOAD", 1, datetime.now(timezone.utc))
+        ticket.photo_urls = ["data:image/jpeg;base64,old"]
+        self.db.commit()
+
+        result = tickets_router.append_ticket_photo_data_urls(
+            self.db,
+            ticket,
+            ["data:image/png;base64,bmV3LXBob3Rv"],
+        )
+
+        self.assertEqual(result, [
+            "data:image/jpeg;base64,old",
+            "data:image/png;base64,bmV3LXBob3Rv",
+        ])
+        self.db.refresh(ticket)
+        self.assertEqual(ticket.photo_urls, result)
+
+    def test_reminder_due_time_uses_visit_time_cutoff(self):
+        before_cutoff = reminder_service.compute_ticket_reminder_due_at(datetime(2026, 6, 8, 13, 59))
+        at_cutoff = reminder_service.compute_ticket_reminder_due_at(datetime(2026, 6, 8, 14, 0))
+
+        self.assertEqual(before_cutoff.isoformat(), "2026-06-07T21:00:00+05:00")
+        self.assertEqual(at_cutoff.isoformat(), "2026-06-08T09:00:00+05:00")
+
+    def test_process_due_ticket_reminders_sends_once_and_resends_after_reschedule(self):
+        scheduled_time = datetime(2026, 6, 8, 15, 0)
+        ticket = self._add_ticket(
+            "TKT-REMINDER",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=scheduled_time,
+            assigned_to="tech-1",
+        )
+        now = datetime(2026, 6, 8, 9, 1, tzinfo=scheduler_mod.TZ_ALMATY)
+
+        with (
+            patch("backend.src.services.reminders.notifier.notify_tenant_ticket_reminder") as tenant_notify,
+            patch("backend.src.services.reminders.notifier.notify_technician_lifecycle") as tech_notify,
+        ):
+            sent_count = reminder_service.process_due_ticket_reminders(self.db, now=now)
+            second_count = reminder_service.process_due_ticket_reminders(self.db, now=now)
+
+            ticket.scheduled_time = datetime(2026, 6, 9, 15, 0)
+            self.db.commit()
+            third_count = reminder_service.process_due_ticket_reminders(
+                self.db,
+                now=datetime(2026, 6, 9, 9, 1, tzinfo=scheduler_mod.TZ_ALMATY),
+            )
+
+        self.assertEqual(sent_count, 1)
+        self.assertEqual(second_count, 0)
+        self.assertEqual(third_count, 1)
+        self.assertEqual(tenant_notify.call_count, 2)
+        self.assertEqual(tech_notify.call_count, 2)
+        self.db.refresh(ticket)
+        self.assertEqual(ticket.reminder_state["sent_for"], "2026-06-09T15:00:00")
+        self.assertEqual(tech_notify.call_args.kwargs["action"], "reminder")
+
+    def test_process_due_ticket_reminders_skips_inactive_and_invalid_tickets(self):
+        visit_time = datetime(2026, 6, 8, 15, 0)
+        cancelled = self._add_ticket(
+            "TKT-REMINDER-CANCELLED",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=visit_time,
+            assigned_to="tech-1",
+        )
+        cancelled.status = models.TicketStatusEnum.cancelled
+        done = self._add_ticket(
+            "TKT-REMINDER-DONE",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=visit_time,
+            assigned_to="tech-1",
+        )
+        done.status = models.TicketStatusEnum.done
+        self._add_ticket("TKT-REMINDER-UNASSIGNED", 1, datetime.now(timezone.utc), scheduled_time=visit_time)
+        self._add_ticket("TKT-REMINDER-UNSCHEDULED", 1, datetime.now(timezone.utc), assigned_to="tech-1")
+        self._add_ticket(
+            "TKT-REMINDER-PAST",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=datetime(2026, 6, 7, 15, 0),
+            assigned_to="tech-1",
+        )
+        self.db.commit()
+
+        with (
+            patch("backend.src.services.reminders.notifier.notify_tenant_ticket_reminder") as tenant_notify,
+            patch("backend.src.services.reminders.notifier.notify_technician_lifecycle") as tech_notify,
+        ):
+            sent_count = reminder_service.process_due_ticket_reminders(
+                self.db,
+                now=datetime(2026, 6, 8, 9, 1, tzinfo=scheduler_mod.TZ_ALMATY),
+            )
+
+        self.assertEqual(sent_count, 0)
+        tenant_notify.assert_not_called()
+        tech_notify.assert_not_called()
 
     def test_update_ticket_rejects_schedule_change_without_assignee(self):
         target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()

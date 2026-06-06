@@ -1,34 +1,19 @@
-import base64
 import logging
 import re
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from fastapi import APIRouter
 
 from ..database import SessionLocal
 from ..schemas import TestMessageRequest, TestMessageResponse
 from ..services.adapters import create_agent_engine
+from ..services import images
 from ..services.buffer import message_buffer
 
 logger = logging.getLogger("uvicorn.error")
 
 router = APIRouter()
 OPERATOR_PAUSE_SECONDS = 60 * 60
-
-
-def _download_image_as_base64(download_url: str) -> str | None:
-    """Download an image from a URL and return it as a base64-encoded data URI."""
-    try:
-        with httpx.Client(timeout=15) as client:
-            resp = client.get(download_url)
-            resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "image/jpeg")
-        b64 = base64.b64encode(resp.content).decode("utf-8")
-        return f"data:{content_type};base64,{b64}"
-    except Exception:
-        logger.exception("Failed to download image from %s", download_url)
-        return None
 
 
 def _phone_to_chat_id(phone: str) -> str:
@@ -136,8 +121,11 @@ async def greenapi_webhook(request_body: dict):
         text = file_data.get("caption", "")
         download_url = file_data.get("downloadUrl", "")
         if download_url:
-            image_base64 = _download_image_as_base64(download_url)
-            logger.info("Image downloaded from WhatsApp for %s", phone)
+            try:
+                image_base64 = images.download_url_to_data_uri(download_url)
+                logger.info("Image downloaded from WhatsApp for %s", phone)
+            except images.ImageProcessingError:
+                logger.exception("Failed to process WhatsApp image for %s", phone)
 
     if not text and not image_base64:
         return {"status": "ignored", "reason": "no_text"}

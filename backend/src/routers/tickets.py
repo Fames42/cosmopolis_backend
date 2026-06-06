@@ -2,7 +2,7 @@ from io import BytesIO
 from datetime import date, datetime
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case
 from sqlalchemy.orm import Session, joinedload
@@ -13,7 +13,7 @@ from openpyxl.styles import Font
 from .. import models, schemas
 from ..database import get_db
 from ..auth import get_dispatcher_user
-from ..services import notifier, scheduler
+from ..services import images, notifier, scheduler
 
 router = APIRouter()
 logger = logging.getLogger("uvicorn.error")
@@ -57,6 +57,17 @@ def _get_ticket_or_404(db: Session, ticket_id: str) -> models.Ticket:
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return ticket
+
+
+def append_ticket_photo_data_urls(
+    db: Session,
+    ticket: models.Ticket,
+    photo_urls: list[str],
+) -> list[str]:
+    ticket.photo_urls = list(ticket.photo_urls or []) + photo_urls
+    db.commit()
+    db.refresh(ticket)
+    return ticket.photo_urls or []
 
 
 def _today_almaty() -> date:
@@ -475,3 +486,30 @@ def get_ticket_photo(
     if not ticket.photo_urls:
         raise HTTPException(status_code=404, detail="No photos attached to this ticket")
     return {"photo_urls": ticket.photo_urls}
+
+
+@router.post("/{ticket_id}/photos")
+async def upload_ticket_photos(
+    ticket_id: str,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_dispatcher_user),
+):
+    """Append manually uploaded dispatcher photos to a ticket."""
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+    if len(files) > 5:
+        raise HTTPException(status_code=400, detail="Upload up to 5 photos at a time")
+
+    ticket = _get_ticket_or_404(db, ticket_id)
+    new_photo_urls: list[str] = []
+    for file in files:
+        try:
+            content = await file.read()
+            new_photo_urls.append(images.bytes_to_data_uri(content, file.content_type))
+        except images.ImageValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await file.close()
+
+    return {"photo_urls": append_ticket_photo_data_urls(db, ticket, new_photo_urls)}

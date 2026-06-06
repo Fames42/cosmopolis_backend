@@ -115,6 +115,7 @@ def generate_technician_lifecycle_message(
         "rescheduled": ("🔁", "Заявка перенесена", "Заявка перенесена. Проверьте новое время визита."),
         "cancelled": ("❌", "Заявка отменена", "Заявка снята с вашего расписания."),
         "deleted": ("🗑️", "Заявка удалена", "Ошибочно созданная заявка удалена и снята с вашего расписания."),
+        "reminder": ("⏰", "Напоминание о заявке", "Напоминаем о запланированном визите."),
     }
     icon, title, action_text = action_map.get(action, ("ℹ️", "Обновление заявки", "Статус заявки изменён."))
 
@@ -390,3 +391,50 @@ def notify_technician_lifecycle(
         building_block=building_block,
     )
     return notify_technician(db, technician_id, message)
+
+
+def generate_tenant_ticket_reminder_message(
+    ticket_number: str,
+    tenant_name: str,
+    building_name: str,
+    apartment: str,
+    scheduled_time: str | datetime | None,
+    description: str = "",
+) -> str:
+    """Generate deterministic tenant reminder text in Russian."""
+    lines = [
+        f"⏰ Напоминание по заявке {ticket_number}",
+        "",
+        f"{tenant_name}, напоминаем: визит специалиста запланирован на {_format_scheduled_time(scheduled_time)}.",
+        f"Адрес: {building_name}, кв. {apartment}.",
+    ]
+    if description:
+        lines.append(f"Заявка: {description}")
+    lines.extend(["", "Если время больше не подходит, ответьте в этот чат."])
+    return "\n".join(lines)
+
+
+def notify_tenant_ticket_reminder(
+    tenant_phone: str,
+    ticket_number: str,
+    tenant_name: str,
+    building_name: str,
+    apartment: str,
+    scheduled_time: str | datetime | None,
+    description: str = "",
+) -> bool:
+    """Send a scheduled ticket reminder to a tenant."""
+    digits = _normalize_phone(tenant_phone)
+    if not digits:
+        logger.warning("Cannot notify tenant for ticket %s: missing phone", ticket_number)
+        return False
+    message = generate_tenant_ticket_reminder_message(
+        ticket_number=ticket_number,
+        tenant_name=tenant_name,
+        building_name=building_name,
+        apartment=apartment,
+        scheduled_time=scheduled_time,
+        description=description,
+    )
+    send_whatsapp_reply(f"{digits}@c.us", message)
+    return True

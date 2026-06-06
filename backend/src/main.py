@@ -12,6 +12,7 @@ from sqlalchemy import text
 from .routers import users, tickets, conversations, analytics, technicians, agents, webhook
 from .auth import router as auth_router
 from .database import engine
+from .services import reminders
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -58,6 +59,16 @@ def log_access_info():
     logger.info(f"Docs:      http://{local_ip}:{port}/docs")
     logger.info("=" * 50)
     log_alembic_state()
+
+
+@app.on_event("startup")
+async def start_ticket_reminders():
+    reminders.start_ticket_reminder_loop()
+
+
+@app.on_event("shutdown")
+async def stop_ticket_reminders():
+    await reminders.stop_ticket_reminder_loop()
 
 # Configure CORS
 app.add_middleware(

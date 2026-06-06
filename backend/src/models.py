@@ -175,6 +175,7 @@ class Ticket(Base):
     assigned_to = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     status = Column(Enum(TicketStatusEnum), default=TicketStatusEnum.new)
     scheduled_time = Column(DateTime, nullable=True)
+    reminder_state = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=_utcnow)
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
