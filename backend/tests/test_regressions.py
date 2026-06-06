@@ -1443,7 +1443,8 @@ class AutoGreetingTests(unittest.TestCase):
 
         self.assertIsNotNone(tenant)
         self.assertEqual(chat_id, "77700000000@c.us")
-        self.assertIn("Алмат", AUTO_GREETING_TEXT)
+        self.assertIn("Бот управляющей компании Cosmopolis", AUTO_GREETING_TEXT)
+        self.assertNotIn("Алмат", AUTO_GREETING_TEXT)
         self.assertTrue(getattr(snapshot, "_greeting_sent_now", False))
         self.assertEqual(self.notifier.replies, [("77700000000@c.us", AUTO_GREETING_TEXT)])
         messages = self.db.query(models.Message).order_by(models.Message.id.asc()).all()

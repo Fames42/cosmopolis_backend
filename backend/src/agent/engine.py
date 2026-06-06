@@ -63,9 +63,9 @@ TOOL_STATE_MAP = {
 
 MAX_TOOL_ROUNDS = 8
 AUTO_GREETING_TEXT = (
-    "Здравствуйте! Меня зовут Алмат, я помощник управляющей компании Cosmopolis. "
+    "Здравствуйте! Я Бот управляющей компании Cosmopolis. "
     "Опишите ваш вопрос или заявку, и я помогу передать её в работу.\n\n"
-    "Hello! My name is Almat, the Cosmopolis property management assistant. "
+    "Hello! I am the Cosmopolis property management bot. "
     "Please describe your question or service request, and I will help submit it."
 )
 
