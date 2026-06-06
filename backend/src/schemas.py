@@ -159,7 +159,7 @@ class ConversationCreate(ConversationBase):
 
 class ConversationResponse(ConversationBase):
     id: int
-    tenant_id: int
+    tenant_id: Optional[int] = None
     state: Optional[str] = None
     scenario: Optional[str] = None
     classifier_confidence: Optional[float] = None

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from pydantic import TypeAdapter
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -140,6 +141,23 @@ class ConversationHistoryTests(unittest.TestCase):
         self.assertEqual(snapshot.state, ConversationState.service_scheduling)
         self.assertEqual(snapshot.context_data["response_id"], "resp_recent")
         self.assertEqual(snapshot.context_data["problem"], "recent leak")
+
+    def test_conversation_response_allows_legacy_null_tenant_id(self):
+        conversation = models.Conversation(
+            id=99,
+            tenant_id=None,
+            whatsapp_chat_id="77010000000@c.us",
+            status=models.ConversationStatusEnum.open,
+            state=models.ConversationStateEnum.new_conversation,
+            created_at=datetime.now(timezone.utc),
+        )
+
+        result = TypeAdapter(list[schemas.ConversationResponse]).validate_python(
+            [conversation],
+            from_attributes=True,
+        )
+
+        self.assertIsNone(result[0].tenant_id)
 
 
 class ImageHelperTests(unittest.TestCase):
