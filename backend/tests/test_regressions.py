@@ -810,6 +810,94 @@ class TicketApiRegressionTests(unittest.TestCase):
         self.assertEqual(result[0].tenantName, "Alice Tenant")
         self.assertEqual(result[0].apartment, "10")
 
+    def test_building_filters_include_apartments_and_scope_by_location(self):
+        self.building.block = "A"
+        self.building.house_number = "1"
+        second_a = models.Building(id=3, name="Building A", address="Second", block="B", house_number="2")
+        third_a = models.Building(id=4, name="Building A", address="Third", block="A", house_number="1")
+        self.db.add_all([
+            second_a,
+            third_a,
+            models.Tenant(id=3, name="Cathy Tenant", phone="77700000003", apartment="7", building_id=3),
+            models.Tenant(id=4, name="Dana Tenant", phone="77700000004", apartment="1", building_id=4),
+        ])
+        self.db.commit()
+
+        result = agents_router.get_building_filters(
+            "Building A",
+            current_user=self.agent,
+            db=self.db,
+        )
+        scoped = agents_router.get_building_filters(
+            "Building A",
+            block="A",
+            house_number="1",
+            current_user=self.agent,
+            db=self.db,
+        )
+
+        self.assertEqual(result.blocks, ["A", "B"])
+        self.assertEqual(result.house_numbers, ["1", "2"])
+        self.assertCountEqual(result.apartments, ["1", "7", "10"])
+        self.assertEqual(scoped.blocks, ["A", "B"])
+        self.assertEqual(scoped.house_numbers, ["1", "2"])
+        self.assertCountEqual(scoped.apartments, ["1", "10"])
+
+    def test_broadcast_without_apartments_sends_to_all_tenants_in_scope(self):
+        self.db.add(models.Tenant(
+            id=3,
+            name="Cathy Tenant",
+            phone="77700000003",
+            apartment="11",
+            building_id=1,
+        ))
+        self.db.commit()
+        body = agents_router.BroadcastNotificationRequest(
+            building_name="Building A",
+            message="Hello",
+        )
+
+        with patch("backend.src.routers.agents.notifier.send_whatsapp_reply") as send_reply:
+            result = agents_router.broadcast_notification(body, current_user=self.agent, db=self.db)
+
+        self.assertEqual(result.total_tenants, 2)
+        self.assertEqual(result.sent, 2)
+        self.assertEqual(send_reply.call_count, 2)
+
+    def test_broadcast_filters_by_selected_apartments(self):
+        self.db.add(models.Tenant(
+            id=3,
+            name="Cathy Tenant",
+            phone="77700000003",
+            apartment="11",
+            building_id=1,
+        ))
+        self.db.commit()
+        body = agents_router.BroadcastNotificationRequest(
+            building_name="Building A",
+            apartments=["10"],
+            message="Hello",
+        )
+
+        with patch("backend.src.routers.agents.notifier.send_whatsapp_reply") as send_reply:
+            result = agents_router.broadcast_notification(body, current_user=self.agent, db=self.db)
+
+        self.assertEqual(result.total_tenants, 1)
+        self.assertEqual(result.sent, 1)
+        send_reply.assert_called_once_with("77700000001@c.us", "Hello")
+
+    def test_broadcast_rejects_empty_apartment_selection(self):
+        body = agents_router.BroadcastNotificationRequest(
+            building_name="Building A",
+            apartments=[],
+            message="Hello",
+        )
+
+        with self.assertRaises(Exception) as raised:
+            agents_router.broadcast_notification(body, current_user=self.agent, db=self.db)
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 400)
+
     def test_ticket_available_slots_are_for_assigned_technician_and_exclude_current_ticket(self):
         target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
         self.db.add_all([

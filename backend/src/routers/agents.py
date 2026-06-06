@@ -113,6 +113,7 @@ class BuildingNameItem(BaseModel):
 class BuildingFiltersResponse(BaseModel):
     blocks: list[str]
     house_numbers: list[str]
+    apartments: list[str]
 
 
 class BuildingTicketHistoryItem(BaseModel):
@@ -218,22 +219,48 @@ def list_building_names(
 @router.get("/buildings/filters", response_model=BuildingFiltersResponse)
 def get_building_filters(
     building_name: str,
+    block: Optional[str] = None,
+    house_number: Optional[str] = None,
     current_user: models.User = Depends(get_agent_user),
     db: Session = Depends(get_db),
 ):
-    """Return available blocks and house numbers for a given building name."""
-    buildings = (
-        db.query(models.Building.block, models.Building.house_number)
-        .filter(func.lower(models.Building.name) == building_name.lower())
-        .all()
+    """Return available location filters for a given building name."""
+    base_query = db.query(models.Building).filter(
+        func.lower(models.Building.name) == building_name.lower()
     )
+    buildings = base_query.all()
     if not buildings:
         raise HTTPException(status_code=404, detail="No buildings found with this name")
 
     blocks = sorted({b.block for b in buildings if b.block})
     house_numbers = sorted({b.house_number for b in buildings if b.house_number})
 
-    return BuildingFiltersResponse(blocks=blocks, house_numbers=house_numbers)
+    scoped_query = (
+        db.query(models.Building.id)
+        .filter(func.lower(models.Building.name) == building_name.lower())
+    )
+    if block is not None:
+        scoped_query = scoped_query.filter(models.Building.block == block)
+    if house_number is not None:
+        scoped_query = scoped_query.filter(models.Building.house_number == house_number)
+
+    scoped_building_ids = [row.id for row in scoped_query.all()]
+    apartments: list[str] = []
+    if scoped_building_ids:
+        apartment_rows = (
+            db.query(models.Tenant.apartment)
+            .filter(models.Tenant.building_id.in_(scoped_building_ids))
+            .filter(models.Tenant.apartment.isnot(None))
+            .distinct()
+            .all()
+        )
+        apartments = sorted({row.apartment for row in apartment_rows if row.apartment})
+
+    return BuildingFiltersResponse(
+        blocks=blocks,
+        house_numbers=house_numbers,
+        apartments=apartments,
+    )
 
 
 @router.get("/buildings/{building_id}/tickets", response_model=list[BuildingTicketHistoryItem])
@@ -501,6 +528,7 @@ class BroadcastNotificationRequest(BaseModel):
     building_name: str
     block: Optional[str] = None
     house_number: Optional[str] = None
+    apartments: Optional[list[str]] = None
     message: str
 
 
@@ -517,7 +545,10 @@ def broadcast_notification(
     current_user: models.User = Depends(get_agent_user),
     db: Session = Depends(get_db),
 ):
-    """Send a WhatsApp notification to all tenants in a building, optionally filtered by block and house_number."""
+    """Send a WhatsApp notification to tenants filtered by building, location, and apartments."""
+    if body.apartments is not None and len(body.apartments) == 0:
+        raise HTTPException(status_code=400, detail="At least one apartment must be selected")
+
     query = db.query(models.Building).filter(
         func.lower(models.Building.name) == body.building_name.lower()
     )
@@ -534,8 +565,11 @@ def broadcast_notification(
     tenants = (
         db.query(models.Tenant)
         .filter(models.Tenant.building_id.in_(building_ids))
-        .all()
     )
+    if body.apartments is not None:
+        tenants = tenants.filter(models.Tenant.apartment.in_(body.apartments))
+
+    tenants = tenants.all()
 
     if not tenants:
         raise HTTPException(status_code=404, detail="No tenants found in the matching buildings")
@@ -559,8 +593,8 @@ def broadcast_notification(
         details.append({"tenant": t.name, "status": "sent"})
 
     logger.info(
-        "Broadcast notification: building_name=%s block=%s house_number=%s — sent=%d skipped=%d",
-        body.building_name, body.block, body.house_number, sent, skipped,
+        "Broadcast notification: building_name=%s block=%s house_number=%s apartments=%s — sent=%d skipped=%d",
+        body.building_name, body.block, body.house_number, body.apartments, sent, skipped,
     )
 
     return BroadcastNotificationResponse(
