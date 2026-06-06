@@ -3,7 +3,7 @@
 import os
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -25,7 +25,7 @@ from ..agent.types import (
     ConversationState,
 )
 from ..agent.llm import OpenAILLMClient
-from ..agent.engine import AgentEngine
+from ..agent.engine import AgentEngine, CONTEXT_RETENTION_DAYS
 from . import scheduler as scheduler_mod
 from . import notifier as notifier_mod
 
@@ -90,6 +90,14 @@ def _conv_to_snapshot(conv: Conversation) -> ConversationSnapshot:
     )
 
 
+def _as_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 # ── SqlConversationStore ─────────────────────────────────────────────────────
 
 class SqlConversationStore:
@@ -117,6 +125,24 @@ class SqlConversationStore:
                 return _tenant_to_info(t)
         return None
 
+    def _latest_activity_at(self, conversation_id: int) -> datetime | None:
+        latest = (
+            self.db.query(Message)
+            .filter(Message.conversation_id == conversation_id)
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .first()
+        )
+        return _as_utc(latest.created_at) if latest else None
+
+    def _reset_for_fresh_session(self, conv: Conversation) -> None:
+        conv.status = ConversationStatusEnum.open
+        conv.state = ConversationStateEnum.new_conversation
+        conv.scenario = None
+        conv.classifier_confidence = None
+        conv.context_data = {"_pending_greeting": True}
+        conv.reopened_at = datetime.now(timezone.utc)
+        conv.escalated_at = None
+
     def get_or_create_conversation(self, tenant_id: int, chat_id: str) -> ConversationSnapshot:
         conv = (
             self.db.query(Conversation)
@@ -125,14 +151,15 @@ class SqlConversationStore:
         )
         if conv:
             if conv.status == ConversationStatusEnum.closed:
-                conv.status = ConversationStatusEnum.open
-                conv.state = ConversationStateEnum.new_conversation
-                conv.scenario = None
-                conv.classifier_confidence = None
-                conv.context_data = {"_pending_greeting": True}
-                conv.reopened_at = datetime.now(timezone.utc)
+                self._reset_for_fresh_session(conv)
                 self.db.commit()
                 self.db.refresh(conv)
+            else:
+                latest_activity = self._latest_activity_at(conv.id)
+                if latest_activity and datetime.now(timezone.utc) - latest_activity >= timedelta(days=CONTEXT_RETENTION_DAYS):
+                    self._reset_for_fresh_session(conv)
+                    self.db.commit()
+                    self.db.refresh(conv)
             return _conv_to_snapshot(conv)
 
         conv = Conversation(

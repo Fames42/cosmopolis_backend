@@ -273,6 +273,12 @@ class TicketDispatcherDetailResponse(BaseModel):
     issueDetails: IssueDetailsSchema
     notes: List[TicketNoteSchema] = []
 
+class TicketAvailableSlotResponse(BaseModel):
+    technician_id: str
+    technician_name: str
+    start: str
+    end: str
+
 # --- Technician Ticket Schemas ---
 class TicketTechnicianListResponse(BaseModel):
     id: str

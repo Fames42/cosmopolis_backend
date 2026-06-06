@@ -26,10 +26,25 @@ logger = logging.getLogger("uvicorn.error")
 TZ_ALMATY = timezone(timedelta(hours=5))
 
 ESCALATION_COOLDOWN_HOURS = 3
+CONTEXT_RETENTION_DAYS = 7
 OPERATOR_PAUSE_CONTEXT_KEYS = (
     "operator_pause_started_at",
     "operator_paused_until",
     "operator_pause_reason",
+)
+INTERNET_ESCALATION_PATTERNS = (
+    r"\bwi[\s\-‑]?fi\b",
+    r"\bwifi\b",
+    r"\binternet\b",
+    r"интернет",
+    r"вай[\s\-‑]?фай",
+    r"\brouter\b",
+    r"роутер",
+    r"модем",
+    r"провайдер",
+    r"нет\s+сети",
+    r"сеть\s+не\s+работает",
+    r"подключени[ея]\s+к\s+сети",
 )
 
 # Tool name → state mapping for dashboard consistency
@@ -48,10 +63,10 @@ TOOL_STATE_MAP = {
 
 MAX_TOOL_ROUNDS = 8
 AUTO_GREETING_TEXT = (
-    "Здравствуйте! Это бот управляющей компании Cosmopolis. Опишите ваш вопрос или заявку, "
-    "и я помогу передать её в работу.\n\n"
-    "Hello! This is the Cosmopolis property management bot. Please describe your question or "
-    "service request, and I will help submit it."
+    "Здравствуйте! Меня зовут Алмат, я помощник управляющей компании Cosmopolis. "
+    "Опишите ваш вопрос или заявку, и я помогу передать её в работу.\n\n"
+    "Hello! My name is Almat, the Cosmopolis property management assistant. "
+    "Please describe your question or service request, and I will help submit it."
 )
 
 
@@ -110,6 +125,24 @@ def _parse_utc_datetime(value: str | None) -> datetime | None:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _is_internet_issue(text: str) -> bool:
+    normalized = text.casefold()
+    return any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in INTERNET_ESCALATION_PATTERNS)
+
+
+def _internet_escalation_reply(text: str) -> str:
+    has_cyrillic = bool(re.search(r"[а-яё]", text.casefold()))
+    if has_cyrillic:
+        return (
+            "Я передал ваш вопрос по интернету/Wi-Fi оператору. "
+            "Пожалуйста, ожидайте, с вами свяжется сотрудник."
+        )
+    return (
+        "I have forwarded your internet/Wi-Fi request to an operator. "
+        "Please wait, a team member will contact you."
+    )
 
 
 # ── AgentEngine ──────────────────────────────────────────────────────────────
@@ -239,6 +272,32 @@ class AgentEngine:
 
         if not last_tenant_content:
             return "", ctx.state.value, None
+
+        if _is_internet_issue(last_tenant_content):
+            reply_text = _internet_escalation_reply(last_tenant_content)
+            try:
+                self.notifier.escalate(ctx.tenant, ctx.phone, last_tenant_content, history)
+            except Exception:
+                logger.exception("Failed to escalate internet/Wi-Fi issue")
+            ctx.state = ConversationState.escalated_to_human
+            ctx.escalated_at = datetime.now(timezone.utc)
+            ctx.scenario = Scenario.unknown.value
+            ctx.update_context({"internet_escalated": True})
+            self.store.update_conversation(ctx.conversation_id, ctx.to_state_update())
+            self.store.save_message(ctx.conversation_id, "ai", reply_text)
+            return reply_text, ctx.state.value, AgentResult(
+                reply=reply_text,
+                classified=True,
+                scenario=ctx.scenario,
+                confidence=1.0,
+                subtype="internet",
+                requires_human=True,
+                tools_called=[{
+                    "name": "internet_escalation",
+                    "args": {"reason": "internet_or_wifi_issue"},
+                    "result": {"status": "ok"},
+                }],
+            )
 
         # Auto-set photo_received when tenant sends an image
         if has_new_image and not ctx.context_data.get("photo_received"):
@@ -649,6 +708,19 @@ class AgentEngine:
                 ticket_number, ctx.tenant.id, slot["technician_id"], slot["start"],
             )
             if result:
+                notified = self.notifier.notify_technician_assigned(
+                    technician_name=slot.get("technician_name", "—"),
+                    ticket_number=result.ticket_number,
+                    tenant=ctx.tenant,
+                    description=result.description or "",
+                    category=result.category or "",
+                    urgency=result.urgency or "",
+                    scheduled_time=slot.get("start", ""),
+                )
+                if not notified:
+                    logger.warning("Technician notification failed for rescheduled ticket %s", result.ticket_number)
+                    ctx.update_context({"notification_failed": True})
+
                 # Clear stale scheduling context; keep reschedule_ticket_id
                 # pointing at the same ticket so immediate re-reschedule works.
                 tid_map = ctx.context_data.get("ticket_id_map", {})

@@ -284,6 +284,106 @@ def find_slots_for_date(
     return slots
 
 
+def find_slots_for_technician_on_date(
+    db: Session,
+    technician_id: str,
+    target_date: date,
+    exclude_ticket_id: int | None = None,
+) -> list[dict]:
+    """Find all available 1-hour slots for one technician on a specific date."""
+    now = datetime.now(TZ_ALMATY)
+    today = now.date()
+    now_min = now.hour * 60 + now.minute
+
+    tech = (
+        db.query(models.User)
+        .filter(
+            models.User.id == technician_id,
+            models.User.role == models.RoleEnum.technician,
+        )
+        .first()
+    )
+    if not tech:
+        return []
+
+    schedule_map = _load_schedule_map(db, [technician_id])
+    key = (technician_id, target_date.weekday())
+    if key not in schedule_map:
+        return []
+
+    work_start, work_end = schedule_map[key]
+    occupied = _get_occupied_ranges(db, technician_id, target_date, exclude_ticket_id)
+    slots: list[dict] = []
+
+    for hour, minute in _generate_time_blocks(work_start, work_end):
+        slot_start_min = hour * 60 + minute
+        slot_end_min = slot_start_min + SLOT_DURATION_MINUTES
+
+        if _overlaps(slot_start_min, slot_end_min, occupied):
+            continue
+        if target_date == today and slot_start_min <= now_min:
+            continue
+
+        slots.append(_make_slot_dict(tech, target_date, hour, minute))
+
+    return slots
+
+
+def find_slots_for_technician_in_range(
+    db: Session,
+    technician_id: str,
+    date_from: date,
+    days: int = 14,
+    exclude_ticket_id: int | None = None,
+) -> list[dict]:
+    """Find all available 1-hour slots for one technician across a date range."""
+    slots: list[dict] = []
+    for day_offset in range(days):
+        slots.extend(
+            find_slots_for_technician_on_date(
+                db,
+                technician_id,
+                date_from + timedelta(days=day_offset),
+                exclude_ticket_id=exclude_ticket_id,
+            )
+        )
+    return slots
+
+
+def verify_technician_slot_available(
+    db: Session,
+    technician_id: str,
+    start_iso: str,
+    exclude_ticket_id: int | None = None,
+) -> bool:
+    """Verify one technician can still take a 1-hour slot at start_iso."""
+    try:
+        start_dt = datetime.fromisoformat(start_iso)
+    except ValueError:
+        return False
+
+    start_naive = start_dt.replace(tzinfo=None)
+    target_date = start_naive.date()
+    req_start = start_naive.hour * 60 + start_naive.minute
+    req_end = req_start + SLOT_DURATION_MINUTES
+
+    now = datetime.now(TZ_ALMATY)
+    if target_date == now.date() and req_start <= now.hour * 60 + now.minute:
+        return False
+
+    schedule_map = _load_schedule_map(db, [technician_id])
+    key = (technician_id, target_date.weekday())
+    if key not in schedule_map:
+        return False
+
+    work_start, work_end = schedule_map[key]
+    if req_start < _to_minutes(work_start) or req_end > _to_minutes(work_end):
+        return False
+
+    occupied = _get_occupied_ranges(db, technician_id, target_date, exclude_ticket_id)
+    return not _overlaps(req_start, req_end, occupied)
+
+
 def create_ticket_from_context(
     db: Session,
     tenant_id: int,

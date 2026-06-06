@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -9,6 +10,7 @@ from typing import Optional
 from .. import models
 from ..database import get_db
 from ..auth import get_agent_user
+from ..agent.engine import AUTO_GREETING_TEXT
 from ..services import notifier
 
 logger = logging.getLogger("uvicorn.error")
@@ -291,6 +293,54 @@ def _tenant_to_item(tenant: models.Tenant, building_name: str | None = None) -> 
     )
 
 
+def _tenant_chat_id(tenant: models.Tenant) -> str:
+    digits = notifier._normalize_phone(tenant.phone)
+    return f"{digits}@c.us" if digits else ""
+
+
+def _send_creation_greeting(db: Session, tenant: models.Tenant) -> None:
+    if not tenant.agent_enabled:
+        return
+
+    chat_id = _tenant_chat_id(tenant)
+    if not chat_id:
+        logger.warning("Greeting not sent for tenant %s: phone is empty or invalid", tenant.id)
+        return
+
+    conversation = (
+        db.query(models.Conversation)
+        .filter(models.Conversation.whatsapp_chat_id == chat_id)
+        .first()
+    )
+    if not conversation:
+        conversation = models.Conversation(
+            tenant_id=tenant.id,
+            whatsapp_chat_id=chat_id,
+            status=models.ConversationStatusEnum.open,
+            state=models.ConversationStateEnum.new_conversation,
+            context_data={},
+        )
+        db.add(conversation)
+        db.flush()
+
+    context_data = dict(conversation.context_data or {})
+    if context_data.get("greeting_sent"):
+        return
+
+    db.add(models.Message(
+        conversation_id=conversation.id,
+        sender=models.MessageSenderEnum.ai,
+        message_type=models.MessageTypeEnum.text,
+        content=AUTO_GREETING_TEXT,
+    ))
+    context_data.pop("_pending_greeting", None)
+    context_data["greeting_sent"] = True
+    context_data["greeting_sent_at"] = datetime.now(timezone.utc).isoformat()
+    conversation.context_data = context_data
+    db.flush()
+    notifier.send_whatsapp_reply(chat_id, AUTO_GREETING_TEXT)
+
+
 # --- Tenants ---
 
 @router.get("/tenants", response_model=list[TenantListItem])
@@ -348,6 +398,10 @@ def create_tenant(
         agent_enabled=body.agent_enabled,
     )
     db.add(tenant)
+    db.commit()
+    db.refresh(tenant)
+
+    _send_creation_greeting(db, tenant)
     db.commit()
     db.refresh(tenant)
 

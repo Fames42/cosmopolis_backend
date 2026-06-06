@@ -1,19 +1,22 @@
 from io import BytesIO
-from datetime import datetime
+from datetime import date, datetime
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case
 from sqlalchemy.orm import Session, joinedload
-from typing import List
+from typing import List, Optional
 from openpyxl import Workbook
 from openpyxl.styles import Font
 
 from .. import models, schemas
 from ..database import get_db
 from ..auth import get_dispatcher_user
+from ..services import notifier, scheduler
 
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error")
 
 
 def _parse_datetime(value: str | None, field_name: str) -> datetime | None:
@@ -40,6 +43,55 @@ def _find_technician(db: Session, identifier: str) -> models.User:
     if not user:
         raise HTTPException(status_code=400, detail="Assigned technician not found")
     return user
+
+
+def _find_ticket(db: Session, ticket_id: str) -> models.Ticket | None:
+    ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()
+    if not ticket and ticket_id.isdigit():
+        ticket = db.query(models.Ticket).filter(models.Ticket.id == int(ticket_id)).first()
+    return ticket
+
+
+def _get_ticket_or_404(db: Session, ticket_id: str) -> models.Ticket:
+    ticket = _find_ticket(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return ticket
+
+
+def _format_technician_scheduled_time(ticket: models.Ticket) -> str:
+    return ticket.scheduled_time.isoformat() if ticket.scheduled_time else "Не назначено"
+
+
+def _today_almaty() -> date:
+    return datetime.now(scheduler.TZ_ALMATY).date()
+
+
+def _notify_assigned_technician(db: Session, ticket: models.Ticket) -> None:
+    if not ticket.assigned_to:
+        return
+
+    try:
+        tenant = ticket.tenant
+        building = tenant.building if tenant else None
+        message = notifier.generate_technician_assignment_message(
+            technician_name=ticket.assignee.name if ticket.assignee else "",
+            ticket_number=ticket.ticket_number,
+            tenant_name=tenant.name if tenant else "N/A",
+            building_name=building.name if building else "N/A",
+            apartment=tenant.apartment if tenant else "N/A",
+            description=ticket.description or "",
+            category=ticket.category or "General",
+            urgency=ticket.urgency or "LOW",
+            scheduled_time=_format_technician_scheduled_time(ticket),
+            building_address=building.address if building else "",
+            building_house_number=building.house_number if building else "",
+            building_floor=building.floor if building else "",
+            building_block=building.block if building else "",
+        )
+        notifier.notify_technician(db, ticket.assigned_to, message)
+    except Exception:
+        logger.exception("Failed to notify technician for ticket %s", ticket.ticket_number)
 
 
 def format_ticket_list(ticket: models.Ticket) -> schemas.TicketDispatcherListResponse:
@@ -181,14 +233,7 @@ def read_ticket(
     db: Session = Depends(get_db), 
     current_user: models.User = Depends(get_dispatcher_user)
 ):
-    ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()
-    if not ticket:
-        if ticket_id.isdigit():
-            ticket = db.query(models.Ticket).filter(models.Ticket.id == int(ticket_id)).first()
-    
-    if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket not found")
-    
+    ticket = _get_ticket_or_404(db, ticket_id)
     return format_ticket_detail(ticket)
 
 @router.post("", response_model=schemas.TicketDispatcherDetailResponse)
@@ -200,17 +245,61 @@ def create_ticket(
     import uuid
     data = ticket.model_dump()
     assigned_to = data.pop("assigned_to", None)
+    scheduled_time = data.get("scheduled_time")
+    if scheduled_time and not assigned_to:
+        raise HTTPException(status_code=400, detail="Assign a technician before scheduling")
+
     if assigned_to:
         assignee = _find_technician(db, assigned_to)
         data["assigned_to"] = assignee.id
         if data.get("status") == models.TicketStatusEnum.new:
             data["status"] = models.TicketStatusEnum.assigned
+        if scheduled_time:
+            if not scheduler.verify_technician_slot_available(
+                db,
+                assignee.id,
+                scheduled_time.isoformat(),
+            ):
+                raise HTTPException(status_code=400, detail="Selected slot is no longer available")
+            data["scheduled_time"] = scheduled_time.replace(tzinfo=None)
 
     db_ticket = models.Ticket(**data, ticket_number=f"TKT-{str(uuid.uuid4())[:8].upper()}")
     db.add(db_ticket)
     db.commit()
     db.refresh(db_ticket)
+    if db_ticket.assigned_to:
+        _notify_assigned_technician(db, db_ticket)
     return format_ticket_detail(db_ticket)
+
+
+@router.get("/{ticket_id}/available-slots", response_model=List[schemas.TicketAvailableSlotResponse])
+def get_ticket_available_slots(
+    ticket_id: str,
+    target_date: Optional[date] = Query(None, alias="date", description="Date to search in YYYY-MM-DD format"),
+    date_from: Optional[date] = Query(None, description="Start date for a range search (YYYY-MM-DD)"),
+    days: int = Query(14, ge=1, le=30, description="Number of days to search when date_from is used"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_dispatcher_user),
+):
+    ticket = _get_ticket_or_404(db, ticket_id)
+    if not ticket.assigned_to:
+        raise HTTPException(status_code=400, detail="Assign a technician before scheduling")
+
+    if target_date:
+        return scheduler.find_slots_for_technician_on_date(
+            db,
+            ticket.assigned_to,
+            target_date,
+            exclude_ticket_id=ticket.id,
+        )
+
+    return scheduler.find_slots_for_technician_in_range(
+        db,
+        ticket.assigned_to,
+        date_from or _today_almaty(),
+        days=days,
+        exclude_ticket_id=ticket.id,
+    )
 
 @router.put("/{ticket_id}", response_model=schemas.TicketDispatcherDetailResponse)
 def update_ticket(
@@ -219,13 +308,8 @@ def update_ticket(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_dispatcher_user)
 ):
-    ticket = db.query(models.Ticket).filter(models.Ticket.ticket_number == ticket_id).first()
-    if not ticket:
-        if ticket_id.isdigit():
-            ticket = db.query(models.Ticket).filter(models.Ticket.id == int(ticket_id)).first()
-            
-    if not ticket:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+    ticket = _get_ticket_or_404(db, ticket_id)
+    previous_scheduled_time = ticket.scheduled_time
 
     if "status" in ticket_update:
         status_str = ticket_update["status"].lower()
@@ -245,7 +329,20 @@ def update_ticket(
             
     scheduled_value = ticket_update.get("scheduledDate", ticket_update.get("scheduled_time"))
     if "scheduledDate" in ticket_update or "scheduled_time" in ticket_update:
-        ticket.scheduled_time = _parse_datetime(scheduled_value, "scheduled_time")
+        parsed_scheduled = _parse_datetime(scheduled_value, "scheduled_time")
+        if parsed_scheduled is None:
+            ticket.scheduled_time = None
+        else:
+            if not ticket.assigned_to:
+                raise HTTPException(status_code=400, detail="Assign a technician before scheduling")
+            if not scheduler.verify_technician_slot_available(
+                db,
+                ticket.assigned_to,
+                parsed_scheduled.isoformat(),
+                exclude_ticket_id=ticket.id,
+            ):
+                raise HTTPException(status_code=400, detail="Selected slot is no longer available")
+            ticket.scheduled_time = parsed_scheduled.replace(tzinfo=None)
 
     if "urgency" in ticket_update:
         allowed = {"low", "medium", "high", "emergency"}
@@ -268,7 +365,26 @@ def update_ticket(
 
     db.commit()
     db.refresh(ticket)
+    if (
+        ("scheduledDate" in ticket_update or "scheduled_time" in ticket_update)
+        and ticket.scheduled_time is not None
+        and ticket.scheduled_time != previous_scheduled_time
+    ):
+        _notify_assigned_technician(db, ticket)
     return format_ticket_detail(ticket)
+
+
+@router.delete("/{ticket_id}")
+def delete_ticket(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_dispatcher_user),
+):
+    ticket = _get_ticket_or_404(db, ticket_id)
+    db.delete(ticket)
+    db.commit()
+    return {"detail": "Ticket deleted"}
+
 
 @router.post("/{ticket_id}/notes", response_model=schemas.TicketNoteSchema)
 def add_note(

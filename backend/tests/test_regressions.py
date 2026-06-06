@@ -12,13 +12,15 @@ from backend.src import models, schemas
 from backend.src.database import Base
 from backend.src.agent.context import ConversationContext
 from backend.src.agent.engine import AUTO_GREETING_TEXT, AgentEngine
-from backend.src.agent.types import ConversationSnapshot, ConversationState, TenantInfo
+from backend.src.agent.types import ConversationSnapshot, ConversationState, HistoryMessage, TenantInfo, TicketResult
 from backend.src.routers.webhook import greenapi_webhook
 from backend.src.services.adapters import SqlConversationStore, WhatsAppNotificationService
 from backend.src.services.buffer import BufferedMessage, MessageBuffer
+from backend.src.services import scheduler as scheduler_mod
 from backend.src.routers.technicians import require_self_technician
 from backend.src.routers import agents as agents_router
 from backend.src.routers import tickets as tickets_router
+from backend.src.routers import technicians as technicians_router
 
 
 class ConversationHistoryTests(unittest.TestCase):
@@ -84,6 +86,51 @@ class ConversationHistoryTests(unittest.TestCase):
         self.assertEqual(len(history), 1)
         self.assertEqual(history[0].content, "[Фото]")
         self.assertTrue(history[0].has_image)
+
+    def test_stale_open_conversation_resets_context_after_seven_days(self):
+        conv = self.db.query(models.Conversation).one()
+        conv.state = models.ConversationStateEnum.service_scheduling
+        conv.scenario = models.ScenarioEnum.service
+        conv.context_data = {
+            "response_id": "resp_old",
+            "ticket_number": "TKT-OLD",
+            "offered_slots": [{"start": "old"}],
+        }
+        self.db.add(models.Message(
+            conversation_id=1,
+            sender=models.MessageSenderEnum.tenant,
+            message_type=models.MessageTypeEnum.text,
+            content="old topic",
+            created_at=datetime.now(timezone.utc) - timedelta(days=8),
+        ))
+        self.db.commit()
+
+        snapshot = self.store.get_or_create_conversation(1, "77700000000@c.us")
+
+        self.assertEqual(snapshot.state, ConversationState.new_conversation)
+        self.assertEqual(snapshot.context_data, {"_pending_greeting": True})
+        self.assertIsNone(snapshot.scenario)
+        self.assertIsNotNone(snapshot.reopened_at)
+
+    def test_recent_open_conversation_keeps_context_before_seven_days(self):
+        conv = self.db.query(models.Conversation).one()
+        conv.state = models.ConversationStateEnum.service_scheduling
+        conv.scenario = models.ScenarioEnum.service
+        conv.context_data = {"response_id": "resp_recent", "problem": "recent leak"}
+        self.db.add(models.Message(
+            conversation_id=1,
+            sender=models.MessageSenderEnum.tenant,
+            message_type=models.MessageTypeEnum.text,
+            content="recent topic",
+            created_at=datetime.now(timezone.utc) - timedelta(days=6),
+        ))
+        self.db.commit()
+
+        snapshot = self.store.get_or_create_conversation(1, "77700000000@c.us")
+
+        self.assertEqual(snapshot.state, ConversationState.service_scheduling)
+        self.assertEqual(snapshot.context_data["response_id"], "resp_recent")
+        self.assertEqual(snapshot.context_data["problem"], "recent leak")
 
 
 class BufferTests(unittest.IsolatedAsyncioTestCase):
@@ -293,6 +340,54 @@ class OperatorPauseAgentTests(unittest.TestCase):
         self.assertEqual(len(store.updated), 1)
 
 
+class InternetEscalationAgentTests(unittest.TestCase):
+    def test_internet_issue_escalates_without_calling_llm_or_ticket_tools(self):
+        class InternetStore(FakeStore):
+            def __init__(self):
+                super().__init__()
+                self.saved = []
+
+            def get_message_history(self, conversation_id, since=None):
+                return [HistoryMessage(role="tenant", content="У меня не работает интернет", has_image=False)]
+
+            def save_message(self, conversation_id, sender, content, image_base64=None):
+                self.saved.append((conversation_id, sender, content))
+
+        tenant = TenantInfo(
+            id=1,
+            name="Tenant",
+            phone="77700000000",
+            building_name="Building",
+            apartment="1",
+            agent_enabled=True,
+        )
+        snapshot = ConversationSnapshot(
+            id=1,
+            tenant_id=1,
+            chat_id="77700000000@c.us",
+            status="open",
+            state=ConversationState.gathering,
+            scenario=None,
+            context_data={},
+            escalated_at=None,
+            reopened_at=None,
+        )
+        ctx = ConversationContext(snapshot, tenant, "77700000000")
+        store = InternetStore()
+        notifier = CapturingNotifier()
+        engine = AgentEngine(store=store, scheduler=None, notifier=notifier, llm=FailingLLM())
+
+        reply, state, result = engine.process_conversation(ctx)
+
+        self.assertEqual(state, "escalated_to_human")
+        self.assertIn("оператору", reply)
+        self.assertTrue(result.requires_human)
+        self.assertEqual(result.subtype, "internet")
+        self.assertEqual(len(notifier.escalations), 1)
+        self.assertEqual(len(store.updated), 1)
+        self.assertEqual(store.saved[0][1], "ai")
+
+
 class CapturingMessageLLM:
     def __init__(self):
         self.calls = []
@@ -361,6 +456,75 @@ class TechnicianAssignmentLanguageTests(unittest.TestCase):
         send_reply.assert_called_once_with("77770000000@c.us", "Сообщение технику на русском языке")
 
 
+class TenantCreationGreetingTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        self.db = session_factory()
+        self.agent = models.User(
+            id="agent-1",
+            name="Agent",
+            email="agent@example.com",
+            password_hash="x",
+            role=models.RoleEnum.agent,
+        )
+        self.building = models.Building(
+            id=1,
+            name="Building",
+            address="Address",
+            owner_id="agent-1",
+        )
+        self.db.add_all([self.agent, self.building])
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_create_tenant_sends_and_records_greeting_when_agent_enabled(self):
+        body = agents_router.TenantCreateRequest(
+            name="New Tenant",
+            phone="87001234567",
+            apartment="10",
+            building_id=1,
+            agent_enabled=True,
+        )
+
+        with patch("backend.src.routers.agents.notifier.send_whatsapp_reply") as send_reply:
+            result = agents_router.create_tenant(body, current_user=self.agent, db=self.db)
+
+        self.assertEqual(result.name, "New Tenant")
+        send_reply.assert_called_once_with("77001234567@c.us", AUTO_GREETING_TEXT)
+
+        conversation = self.db.query(models.Conversation).one()
+        self.assertEqual(conversation.whatsapp_chat_id, "77001234567@c.us")
+        self.assertTrue(conversation.context_data["greeting_sent"])
+        message = self.db.query(models.Message).one()
+        self.assertEqual(message.sender, models.MessageSenderEnum.ai)
+        self.assertEqual(message.content, AUTO_GREETING_TEXT)
+
+    def test_create_tenant_does_not_greet_when_agent_disabled(self):
+        body = agents_router.TenantCreateRequest(
+            name="Silent Tenant",
+            phone="77007654321",
+            apartment="11",
+            building_id=1,
+            agent_enabled=False,
+        )
+
+        with patch("backend.src.routers.agents.notifier.send_whatsapp_reply") as send_reply:
+            result = agents_router.create_tenant(body, current_user=self.agent, db=self.db)
+
+        self.assertEqual(result.name, "Silent Tenant")
+        send_reply.assert_not_called()
+        self.assertEqual(self.db.query(models.Conversation).count(), 0)
+        self.assertEqual(self.db.query(models.Message).count(), 0)
+
+
 class TicketApiRegressionTests(unittest.TestCase):
     def setUp(self):
         engine = create_engine(
@@ -389,6 +553,15 @@ class TicketApiRegressionTests(unittest.TestCase):
             id="tech-1",
             name="Technician One",
             email="tech@example.com",
+            phone="+77770000001",
+            password_hash="x",
+            role=models.RoleEnum.technician,
+        )
+        self.other_tech = models.User(
+            id="tech-2",
+            name="Technician Two",
+            email="tech2@example.com",
+            phone="+77770000002",
             password_hash="x",
             role=models.RoleEnum.technician,
         )
@@ -397,7 +570,7 @@ class TicketApiRegressionTests(unittest.TestCase):
         self.tenant = models.Tenant(id=1, name="Alice Tenant", phone="77700000001", apartment="10", building_id=1)
         other_tenant = models.Tenant(id=2, name="Bob Tenant", phone="77700000002", apartment="20", building_id=2)
         self.db.add_all([
-            self.dispatcher, self.agent, self.tech,
+            self.dispatcher, self.agent, self.tech, self.other_tech,
             self.building, other_building, self.tenant, other_tenant,
         ])
         self.db.commit()
@@ -411,6 +584,7 @@ class TicketApiRegressionTests(unittest.TestCase):
         tenant_id: int,
         created_at: datetime,
         scheduled_time: datetime | None = None,
+        assigned_to: str | None = None,
     ) -> models.Ticket:
         ticket = models.Ticket(
             ticket_number=number,
@@ -421,6 +595,7 @@ class TicketApiRegressionTests(unittest.TestCase):
             availability_time=None,
             status=models.TicketStatusEnum.new,
             scheduled_time=scheduled_time,
+            assigned_to=assigned_to,
             created_at=created_at,
         )
         self.db.add(ticket)
@@ -449,12 +624,95 @@ class TicketApiRegressionTests(unittest.TestCase):
             assigned_to="tech-1",
         )
 
-        result = tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
+        with (
+            patch("backend.src.routers.tickets.notifier.generate_technician_assignment_message", return_value="message") as generate_message,
+            patch("backend.src.routers.tickets.notifier.notify_technician") as notify_technician,
+        ):
+            result = tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
 
         ticket = self.db.query(models.Ticket).filter(models.Ticket.ticket_number == result.id).one()
         self.assertIsNone(ticket.availability_time)
         self.assertEqual(ticket.assigned_to, "tech-1")
         self.assertEqual(ticket.status, models.TicketStatusEnum.assigned)
+        generate_message.assert_called_once()
+        notify_technician.assert_called_once_with(self.db, "tech-1", "message")
+
+    def test_create_ticket_rejects_scheduled_time_without_assignee(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 9, 0)
+        body = schemas.TicketCreate(
+            tenant_id=1,
+            category="Plumbing",
+            urgency="medium",
+            description="Leak",
+            scheduled_time=target_time,
+        )
+
+        with self.assertRaises(Exception) as raised:
+            tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 400)
+
+    def test_create_ticket_rejects_unavailable_scheduled_slot(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        self.db.add(models.TechnicianSchedule(
+            technician_id="tech-1",
+            day_of_week=target_date.weekday(),
+            start_time="09:00",
+            end_time="12:00",
+        ))
+        self.db.commit()
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 10, 0)
+        self._add_ticket(
+            "TKT-BLOCKED-CREATE",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=target_time,
+            assigned_to="tech-1",
+        )
+        body = schemas.TicketCreate(
+            tenant_id=1,
+            category="Plumbing",
+            urgency="medium",
+            description="Leak",
+            scheduled_time=target_time,
+            assigned_to="tech-1",
+        )
+
+        with self.assertRaises(Exception) as raised:
+            tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 400)
+
+    def test_create_ticket_accepts_available_scheduled_slot_and_notifies(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        self.db.add(models.TechnicianSchedule(
+            technician_id="tech-1",
+            day_of_week=target_date.weekday(),
+            start_time="09:00",
+            end_time="12:00",
+        ))
+        self.db.commit()
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 9, 0)
+        body = schemas.TicketCreate(
+            tenant_id=1,
+            category="Plumbing",
+            urgency="medium",
+            description="Leak",
+            scheduled_time=target_time,
+            assigned_to="tech-1",
+        )
+
+        with (
+            patch("backend.src.routers.tickets.notifier.generate_technician_assignment_message", return_value="message"),
+            patch("backend.src.routers.tickets.notifier.notify_technician") as notify_technician,
+        ):
+            result = tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
+
+        ticket = self.db.query(models.Ticket).filter(models.Ticket.ticket_number == result.id).one()
+        self.assertEqual(ticket.assigned_to, "tech-1")
+        self.assertEqual(ticket.scheduled_time, target_time)
+        notify_technician.assert_called_once_with(self.db, "tech-1", "message")
 
     def test_update_ticket_changes_description(self):
         self._add_ticket("TKT-DESC", 1, datetime(2026, 5, 17, tzinfo=timezone.utc))
@@ -482,19 +740,321 @@ class TicketApiRegressionTests(unittest.TestCase):
         self.assertEqual(result[0].tenantName, "Alice Tenant")
         self.assertEqual(result[0].apartment, "10")
 
+    def test_ticket_available_slots_are_for_assigned_technician_and_exclude_current_ticket(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        self.db.add_all([
+            models.TechnicianSchedule(
+                technician_id="tech-1",
+                day_of_week=target_date.weekday(),
+                start_time="09:00",
+                end_time="12:00",
+            ),
+            models.TechnicianSchedule(
+                technician_id="tech-2",
+                day_of_week=target_date.weekday(),
+                start_time="09:00",
+                end_time="12:00",
+            ),
+        ])
+        self.db.commit()
+        current_time = datetime(target_date.year, target_date.month, target_date.day, 9, 0)
+        occupied_time = datetime(target_date.year, target_date.month, target_date.day, 10, 0)
+        self._add_ticket(
+            "TKT-CURRENT",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=current_time,
+            assigned_to="tech-1",
+        )
+        self._add_ticket(
+            "TKT-OCCUPIED",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=occupied_time,
+            assigned_to="tech-1",
+        )
+
+        result = tickets_router.get_ticket_available_slots(
+            "TKT-CURRENT",
+            target_date=target_date,
+            db=self.db,
+            current_user=self.dispatcher,
+        )
+
+        starts = {slot["start"][11:16] for slot in result}
+        self.assertTrue(all(slot["technician_id"] == "tech-1" for slot in result))
+        self.assertIn("09:00", starts)
+        self.assertNotIn("10:00", starts)
+
+    def test_ticket_available_slots_range_returns_next_days_for_assigned_technician(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        next_date = target_date + timedelta(days=1)
+        self.db.add_all([
+            models.TechnicianSchedule(
+                technician_id="tech-1",
+                day_of_week=target_date.weekday(),
+                start_time="09:00",
+                end_time="11:00",
+            ),
+            models.TechnicianSchedule(
+                technician_id="tech-1",
+                day_of_week=next_date.weekday(),
+                start_time="14:00",
+                end_time="16:00",
+            ),
+            models.TechnicianSchedule(
+                technician_id="tech-2",
+                day_of_week=target_date.weekday(),
+                start_time="09:00",
+                end_time="11:00",
+            ),
+        ])
+        self.db.commit()
+        self._add_ticket(
+            "TKT-RANGE",
+            1,
+            datetime.now(timezone.utc),
+            assigned_to="tech-1",
+        )
+
+        result = tickets_router.get_ticket_available_slots(
+            "TKT-RANGE",
+            target_date=None,
+            date_from=target_date,
+            days=2,
+            db=self.db,
+            current_user=self.dispatcher,
+        )
+
+        date_keys = {slot["start"][:10] for slot in result}
+        self.assertTrue(all(slot["technician_id"] == "tech-1" for slot in result))
+        self.assertIn(target_date.isoformat(), date_keys)
+        self.assertIn(next_date.isoformat(), date_keys)
+
+    def test_technician_available_slots_range_returns_selected_technician_slots(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        self.db.add_all([
+            models.TechnicianSchedule(
+                technician_id="tech-1",
+                day_of_week=target_date.weekday(),
+                start_time="09:00",
+                end_time="11:00",
+            ),
+            models.TechnicianSchedule(
+                technician_id="tech-2",
+                day_of_week=target_date.weekday(),
+                start_time="12:00",
+                end_time="14:00",
+            ),
+        ])
+        self.db.commit()
+
+        result = technicians_router.get_technician_available_slots(
+            "tech-1",
+            date_from=target_date,
+            days=1,
+            db=self.db,
+            current_user=self.dispatcher,
+        )
+
+        self.assertTrue(result)
+        self.assertTrue(all(slot["technician_id"] == "tech-1" for slot in result))
+        self.assertTrue(all(slot["start"].startswith(target_date.isoformat()) for slot in result))
+
+    def test_update_ticket_rejects_schedule_change_without_assignee(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 9, 0)
+        self._add_ticket("TKT-NO-TECH", 1, datetime.now(timezone.utc))
+
+        with self.assertRaises(Exception) as raised:
+            tickets_router.update_ticket(
+                "TKT-NO-TECH",
+                {"scheduledDate": target_time.isoformat()},
+                db=self.db,
+                current_user=self.dispatcher,
+            )
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 400)
+
+    def test_update_ticket_rejects_unavailable_slot(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        self.db.add(models.TechnicianSchedule(
+            technician_id="tech-1",
+            day_of_week=target_date.weekday(),
+            start_time="09:00",
+            end_time="12:00",
+        ))
+        self.db.commit()
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 10, 0)
+        self._add_ticket("TKT-CHANGE", 1, datetime.now(timezone.utc), assigned_to="tech-1")
+        self._add_ticket(
+            "TKT-BLOCKER",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=target_time,
+            assigned_to="tech-1",
+        )
+
+        with self.assertRaises(Exception) as raised:
+            tickets_router.update_ticket(
+                "TKT-CHANGE",
+                {"scheduledDate": target_time.isoformat()},
+                db=self.db,
+                current_user=self.dispatcher,
+            )
+
+        self.assertEqual(getattr(raised.exception, "status_code", None), 400)
+
+    def test_update_ticket_notifies_technician_on_successful_schedule_change(self):
+        target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
+        self.db.add(models.TechnicianSchedule(
+            technician_id="tech-1",
+            day_of_week=target_date.weekday(),
+            start_time="09:00",
+            end_time="12:00",
+        ))
+        self.db.commit()
+        target_time = datetime(target_date.year, target_date.month, target_date.day, 9, 0)
+        self._add_ticket("TKT-RESCHEDULE", 1, datetime.now(timezone.utc), assigned_to="tech-1")
+
+        with (
+            patch("backend.src.routers.tickets.notifier.generate_technician_assignment_message", return_value="message") as generate_message,
+            patch("backend.src.routers.tickets.notifier.notify_technician") as notify_technician,
+        ):
+            result = tickets_router.update_ticket(
+                "TKT-RESCHEDULE",
+                {"scheduledDate": target_time.isoformat()},
+                db=self.db,
+                current_user=self.dispatcher,
+            )
+
+        self.assertEqual(result.scheduledDate, target_time.isoformat())
+        generate_message.assert_called_once()
+        notify_technician.assert_called_once_with(self.db, "tech-1", "message")
+
+    def test_delete_ticket_removes_ticket_and_notes(self):
+        ticket = self._add_ticket("TKT-DELETE", 1, datetime.now(timezone.utc))
+        self.db.add(models.TicketNote(
+            ticket_id=ticket.id,
+            author_id="dispatcher-1",
+            text="Delete this note too",
+        ))
+        self.db.commit()
+
+        result = tickets_router.delete_ticket(
+            "TKT-DELETE",
+            db=self.db,
+            current_user=self.dispatcher,
+        )
+
+        self.assertEqual(result, {"detail": "Ticket deleted"})
+        self.assertEqual(self.db.query(models.Ticket).filter(models.Ticket.ticket_number == "TKT-DELETE").count(), 0)
+        self.assertEqual(self.db.query(models.TicketNote).filter(models.TicketNote.ticket_id == ticket.id).count(), 0)
+
 
 class CapturingNotifier:
     def __init__(self):
         self.replies = []
+        self.escalations = []
 
     def send_reply(self, chat_id, text):
         self.replies.append((chat_id, text))
 
     def escalate(self, *args, **kwargs):
-        pass
+        self.escalations.append((args, kwargs))
 
     def notify_technician_assigned(self, *args, **kwargs):
         return True
+
+
+class RescheduleNotificationTests(unittest.TestCase):
+    def test_reschedule_tool_notifies_technician(self):
+        class RescheduleScheduler:
+            def __init__(self):
+                self.verify_args = None
+                self.reschedule_args = None
+
+            def verify_slot_available(self, technician_id, start_iso, exclude_ticket_id=None):
+                self.verify_args = (technician_id, start_iso, exclude_ticket_id)
+                return True
+
+            def reschedule_ticket(self, ticket_number, tenant_id, technician_id, new_start_iso):
+                self.reschedule_args = (ticket_number, tenant_id, technician_id, new_start_iso)
+                return TicketResult(
+                    ticket_number=ticket_number,
+                    assigned_to=technician_id,
+                    description="Leak",
+                    category="Plumbing",
+                    urgency="medium",
+                )
+
+        class RescheduleNotifier:
+            def __init__(self):
+                self.notifications = []
+
+            def notify_technician_assigned(self, **kwargs):
+                self.notifications.append(kwargs)
+                return True
+
+            def send_reply(self, *args, **kwargs):
+                pass
+
+            def escalate(self, *args, **kwargs):
+                pass
+
+        tenant = TenantInfo(
+            id=1,
+            name="Tenant",
+            phone="77700000000",
+            building_name="Building",
+            apartment="10",
+            agent_enabled=True,
+        )
+        snapshot = ConversationSnapshot(
+            id=1,
+            tenant_id=1,
+            chat_id="77700000000@c.us",
+            status="open",
+            state=ConversationState.managing_ticket,
+            scenario=None,
+            context_data={
+                "offered_slots": [{
+                    "technician_id": "tech-1",
+                    "technician_name": "Technician One",
+                    "start": "2026-05-25T09:00:00+05:00",
+                    "end": "2026-05-25T10:00:00+05:00",
+                }],
+                "reschedule_ticket_id": 42,
+                "ticket_id_map": {"TKT-RESCHEDULE": 42},
+            },
+            escalated_at=None,
+            reopened_at=None,
+        )
+        ctx = ConversationContext(snapshot, tenant, "77700000000")
+        scheduler = RescheduleScheduler()
+        notifier = RescheduleNotifier()
+        engine = AgentEngine(FakeStore(), scheduler, notifier, FailingLLM())
+
+        result = engine._execute_tool(
+            "reschedule_ticket",
+            {"ticket_number": "TKT-RESCHEDULE", "slot_index": 0},
+            ctx,
+            [],
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(scheduler.verify_args, ("tech-1", "2026-05-25T09:00:00+05:00", 42))
+        self.assertEqual(
+            scheduler.reschedule_args,
+            ("TKT-RESCHEDULE", 1, "tech-1", "2026-05-25T09:00:00+05:00"),
+        )
+        self.assertEqual(len(notifier.notifications), 1)
+        notification = notifier.notifications[0]
+        self.assertEqual(notification["technician_name"], "Technician One")
+        self.assertEqual(notification["ticket_number"], "TKT-RESCHEDULE")
+        self.assertEqual(notification["tenant"], tenant)
+        self.assertEqual(notification["scheduled_time"], "2026-05-25T09:00:00+05:00")
+        self.assertEqual(ctx.context_data["offered_slots"], [])
 
 
 class AutoGreetingTests(unittest.TestCase):
@@ -531,6 +1091,7 @@ class AutoGreetingTests(unittest.TestCase):
 
         self.assertIsNotNone(tenant)
         self.assertEqual(chat_id, "77700000000@c.us")
+        self.assertIn("Алмат", AUTO_GREETING_TEXT)
         self.assertTrue(getattr(snapshot, "_greeting_sent_now", False))
         self.assertEqual(self.notifier.replies, [("77700000000@c.us", AUTO_GREETING_TEXT)])
         messages = self.db.query(models.Message).order_by(models.Message.id.asc()).all()

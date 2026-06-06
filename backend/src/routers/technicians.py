@@ -7,8 +7,13 @@ from datetime import datetime, timezone, date, timedelta
 from .. import models, schemas
 from ..database import get_db
 from ..auth import get_current_user, get_admin_user, get_dispatcher_user
+from ..services import scheduler
 
 router = APIRouter()
+
+
+def _today_almaty() -> date:
+    return datetime.now(scheduler.TZ_ALMATY).date()
 
 
 def require_self_technician(current_user: models.User) -> None:
@@ -336,6 +341,29 @@ def set_technician_schedule(
     for s in new_schedules:
         db.refresh(s)
     return new_schedules
+
+
+@router.get("/{tech_id}/available-slots", response_model=List[schemas.TicketAvailableSlotResponse])
+def get_technician_available_slots(
+    tech_id: str,
+    date_from: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
+    days: int = Query(14, ge=1, le=30, description="Number of days to search"),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_dispatcher_user),
+):
+    tech = db.query(models.User).filter(
+        models.User.id == tech_id,
+        models.User.role == models.RoleEnum.technician,
+    ).first()
+    if not tech:
+        raise HTTPException(status_code=404, detail="Техник не найден")
+
+    return scheduler.find_slots_for_technician_in_range(
+        db,
+        tech.id,
+        date_from or _today_almaty(),
+        days=days,
+    )
 
 
 @router.get("/{tech_id}/workload", response_model=schemas.TechnicianWorkloadResponse)
