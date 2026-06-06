@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from datetime import datetime
 
 import httpx
 from sqlalchemy.orm import Session
@@ -77,6 +78,83 @@ def _format_phone(phone: str) -> str:
     """Format phone as +7XXXXXXXXXX for display."""
     digits = _normalize_phone(phone)
     return f"+{digits}" if digits else phone
+
+
+def _format_scheduled_time(value: str | datetime | None) -> str:
+    """Format scheduled time for technician-facing Russian notifications."""
+    if value is None or value == "":
+        return "Не назначено"
+    if isinstance(value, datetime):
+        return value.strftime("%d.%m.%Y %H:%M")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.strftime("%d.%m.%Y %H:%M")
+    except ValueError:
+        return value
+
+
+def generate_technician_lifecycle_message(
+    action: str,
+    ticket_number: str,
+    tenant_name: str,
+    building_name: str,
+    apartment: str,
+    scheduled_time: str | datetime | None = None,
+    reason: str = "",
+    description: str = "",
+    category: str = "",
+    urgency: str = "",
+    building_address: str = "",
+    building_house_number: str = "",
+    building_floor: str = "",
+    building_block: str = "",
+) -> str:
+    """Generate deterministic technician ticket lifecycle notifications."""
+    action_map = {
+        "assigned": ("🔧", "Новая заявка", "Вам назначена заявка."),
+        "rescheduled": ("🔁", "Заявка перенесена", "Заявка перенесена. Проверьте новое время визита."),
+        "cancelled": ("❌", "Заявка отменена", "Заявка снята с вашего расписания."),
+        "deleted": ("🗑️", "Заявка удалена", "Ошибочно созданная заявка удалена и снята с вашего расписания."),
+    }
+    icon, title, action_text = action_map.get(action, ("ℹ️", "Обновление заявки", "Статус заявки изменён."))
+
+    addr_parts = [building_name]
+    if building_address:
+        addr_parts.append(building_address)
+    addr_line = ", ".join(part for part in addr_parts if part) or "N/A"
+
+    detail_parts = []
+    if building_house_number:
+        detail_parts.append(f"дом {building_house_number}")
+    if building_block:
+        detail_parts.append(f"подъезд {building_block}")
+    if building_floor:
+        detail_parts.append(f"этаж {building_floor}")
+    detail_line = ", ".join(detail_parts)
+
+    lines = [
+        f"{icon} *{title}: {ticket_number}*",
+        "",
+        f"*Действие:* {action_text}",
+        f"*Жилец:* {tenant_name or 'N/A'}",
+        f"*Адрес:* {addr_line}",
+    ]
+    if detail_line:
+        lines.append(f"*Дом:* {detail_line}")
+    lines.extend([
+        f"*Квартира:* {apartment or 'N/A'}",
+        f"*Время визита:* {_format_scheduled_time(scheduled_time)}",
+    ])
+    if reason:
+        lines.append(f"*Причина:* {reason}")
+    if description:
+        lines.append(f"*Проблема:* {description}")
+    if category:
+        lines.append(f"*Категория:* {category}")
+    if urgency:
+        lines.append(f"*Срочность:* {urgency}")
+    lines.extend(["", "При возникновении вопросов свяжитесь с диспетчером."])
+    return "\n".join(lines)
 
 
 def generate_escalation_message(
@@ -254,7 +332,7 @@ def generate_technician_assignment_message(
         return fallback
 
 
-def notify_technician(db: Session, technician_id: str, message: str) -> None:
+def notify_technician(db: Session, technician_id: str, message: str) -> bool:
     """Send a WhatsApp message to the assigned technician."""
     tech = (
         db.query(models.User)
@@ -263,11 +341,52 @@ def notify_technician(db: Session, technician_id: str, message: str) -> None:
     )
     if not tech or not tech.phone:
         logger.warning("Cannot notify technician %s: not found or no phone", technician_id)
-        return
+        return False
 
     digits = _normalize_phone(tech.phone)
     if not digits:
-        return
+        return False
     chat_id = f"{digits}@c.us"
     logger.info("Sending assignment notification to technician %s (%s)", tech.name, chat_id)
     send_whatsapp_reply(chat_id, message)
+    return True
+
+
+def notify_technician_lifecycle(
+    db: Session,
+    technician_id: str | None,
+    action: str,
+    ticket_number: str,
+    tenant_name: str,
+    building_name: str,
+    apartment: str,
+    scheduled_time: str | datetime | None = None,
+    reason: str = "",
+    description: str = "",
+    category: str = "",
+    urgency: str = "",
+    building_address: str = "",
+    building_house_number: str = "",
+    building_floor: str = "",
+    building_block: str = "",
+) -> bool:
+    """Build and send a deterministic ticket lifecycle message to a technician."""
+    if not technician_id:
+        return False
+    message = generate_technician_lifecycle_message(
+        action=action,
+        ticket_number=ticket_number,
+        tenant_name=tenant_name,
+        building_name=building_name,
+        apartment=apartment,
+        scheduled_time=scheduled_time,
+        reason=reason,
+        description=description,
+        category=category,
+        urgency=urgency,
+        building_address=building_address,
+        building_house_number=building_house_number,
+        building_floor=building_floor,
+        building_block=building_block,
+    )
+    return notify_technician(db, technician_id, message)

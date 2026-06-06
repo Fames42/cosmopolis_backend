@@ -620,8 +620,9 @@ class AgentEngine:
                 offered = ctx.context_data.get("offered_slots", [])
                 selected_idx = ctx.context_data.get("selected_slot_index", 0)
                 slot = offered[selected_idx] if selected_idx < len(offered) else {}
-                notified = self.notifier.notify_technician_assigned(
-                    technician_name=slot.get("technician_name", "—"),
+                notified = self.notifier.notify_technician_lifecycle(
+                    technician_id=ticket.assigned_to,
+                    action="assigned",
                     ticket_number=ticket.ticket_number,
                     tenant=ctx.tenant,
                     description=ticket.description or "",
@@ -708,14 +709,16 @@ class AgentEngine:
                 ticket_number, ctx.tenant.id, slot["technician_id"], slot["start"],
             )
             if result:
-                notified = self.notifier.notify_technician_assigned(
-                    technician_name=slot.get("technician_name", "—"),
+                notified = self.notifier.notify_technician_lifecycle(
+                    technician_id=slot["technician_id"],
+                    action="rescheduled",
                     ticket_number=result.ticket_number,
                     tenant=ctx.tenant,
                     description=result.description or "",
                     category=result.category or "",
                     urgency=result.urgency or "",
                     scheduled_time=slot.get("start", ""),
+                    reason="Клиент перенёс заявку через чат-бота.",
                 )
                 if not notified:
                     logger.warning("Technician notification failed for rescheduled ticket %s", result.ticket_number)
@@ -759,15 +762,30 @@ class AgentEngine:
             ticket_number = args.get("ticket_number", "")
             if not ticket_number:
                 return {"status": "error", "message": "ticket_number is required."}
-            success, reason = self.scheduler.cancel_ticket(ticket_number, ctx.tenant.id)
-            if success:
+            result = self.scheduler.cancel_ticket(ticket_number, ctx.tenant.id)
+            if result.success:
+                if result.previous_assigned_to:
+                    notified = self.notifier.notify_technician_lifecycle(
+                        technician_id=result.previous_assigned_to,
+                        action="cancelled",
+                        ticket_number=result.ticket_number or ticket_number,
+                        tenant=ctx.tenant,
+                        description=result.description or "",
+                        category=result.category or "",
+                        urgency=result.urgency or "",
+                        scheduled_time=result.previous_scheduled_time or "",
+                        reason="Клиент отменил заявку через чат-бота.",
+                    )
+                    if not notified:
+                        logger.warning("Technician cancellation notification failed for ticket %s", ticket_number)
+                        ctx.update_context({"notification_failed": True})
                 return {"status": "ok", "message": f"Ticket {ticket_number} has been cancelled."}
             error_messages = {
                 "not_found": "Ticket not found or access denied.",
                 "already_cancelled": f"Ticket {ticket_number} is already cancelled.",
                 "already_done": f"Ticket {ticket_number} is already completed and cannot be cancelled.",
             }
-            return {"status": "error", "message": error_messages.get(reason, "Unable to cancel ticket.")}
+            return {"status": "error", "message": error_messages.get(result.reason, "Unable to cancel ticket.")}
 
         elif name == "close_conversation":
             ctx.state = ConversationState.closed

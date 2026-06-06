@@ -19,6 +19,7 @@ from ..agent.types import (
     HistoryMessage,
     SlotInfo,
     TicketResult,
+    TicketCancellationResult,
     TicketSummary,
     ConversationSnapshot,
     ConversationStateUpdate,
@@ -403,7 +404,7 @@ class SqlSchedulingService:
         self.db.commit()
         return True
 
-    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> tuple[bool, str]:
+    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> TicketCancellationResult:
         ticket = (
             self.db.query(models.Ticket)
             .filter(
@@ -413,14 +414,42 @@ class SqlSchedulingService:
             .first()
         )
         if not ticket:
-            return False, "not_found"
+            return TicketCancellationResult(success=False, reason="not_found", ticket_number=ticket_number)
         if ticket.status == models.TicketStatusEnum.cancelled:
-            return False, "already_cancelled"
+            return TicketCancellationResult(
+                success=False,
+                reason="already_cancelled",
+                ticket_number=ticket.ticket_number,
+            )
         if ticket.status == models.TicketStatusEnum.done:
-            return False, "already_done"
+            return TicketCancellationResult(
+                success=False,
+                reason="already_done",
+                ticket_number=ticket.ticket_number,
+            )
+
+        previous_assigned_to = ticket.assigned_to
+        previous_technician_name = ticket.assignee.name if ticket.assignee else None
+        previous_scheduled_time = ticket.scheduled_time.isoformat() if ticket.scheduled_time else None
+        description = ticket.description
+        category = ticket.category
+        urgency = ticket.urgency
+
         ticket.status = models.TicketStatusEnum.cancelled
+        ticket.assigned_to = None
+        ticket.scheduled_time = None
         self.db.commit()
-        return True, "ok"
+        return TicketCancellationResult(
+            success=True,
+            reason="ok",
+            ticket_number=ticket.ticket_number,
+            previous_assigned_to=previous_assigned_to,
+            previous_technician_name=previous_technician_name,
+            previous_scheduled_time=previous_scheduled_time,
+            description=description,
+            category=category,
+            urgency=urgency,
+        )
 
     def find_technician_contact(self, category: str) -> dict | None:
         techs = scheduler_mod._find_all_techs(self.db)
@@ -574,6 +603,41 @@ class WhatsAppNotificationService:
             return sent
         except Exception:
             logger.exception("Failed to notify technician %s for ticket %s", technician_name, ticket_number)
+            return False
+
+    def notify_technician_lifecycle(
+        self,
+        technician_id: str,
+        action: str,
+        ticket_number: str,
+        tenant: TenantInfo,
+        description: str = "",
+        category: str = "",
+        urgency: str = "",
+        scheduled_time: str = "",
+        reason: str = "",
+    ) -> bool:
+        try:
+            return notifier_mod.notify_technician_lifecycle(
+                db=self.db,
+                technician_id=technician_id,
+                action=action,
+                ticket_number=ticket_number,
+                tenant_name=tenant.name,
+                building_name=tenant.building_name,
+                apartment=tenant.apartment,
+                scheduled_time=scheduled_time,
+                reason=reason,
+                description=description,
+                category=category,
+                urgency=urgency,
+                building_address=tenant.building_address,
+                building_house_number=tenant.building_house_number,
+                building_floor=tenant.building_floor,
+                building_block=tenant.building_block,
+            )
+        except Exception:
+            logger.exception("Failed to send %s notification for ticket %s", action, ticket_number)
             return False
 
 

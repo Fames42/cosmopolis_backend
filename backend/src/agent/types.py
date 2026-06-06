@@ -80,6 +80,19 @@ class TicketResult:
     urgency: str | None = None
 
 
+@dataclass(frozen=True)
+class TicketCancellationResult:
+    success: bool
+    reason: str
+    ticket_number: str | None = None
+    previous_assigned_to: str | None = None
+    previous_technician_name: str | None = None
+    previous_scheduled_time: str | None = None
+    description: str | None = None
+    category: str | None = None
+    urgency: str | None = None
+
+
 @dataclass
 class ConversationSnapshot:
     id: int

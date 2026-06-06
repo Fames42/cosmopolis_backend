@@ -10,6 +10,7 @@ from .types import (
     HistoryMessage,
     SlotInfo,
     TicketResult,
+    TicketCancellationResult,
     TicketSummary,
     ConversationSnapshot,
     ConversationStateUpdate,
@@ -73,7 +74,7 @@ class SchedulingService(Protocol):
         self, ticket_number: str, tenant_id: int, comment: str,
     ) -> bool: ...
 
-    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> tuple[bool, str]: ...
+    def cancel_ticket(self, ticket_number: str, tenant_id: int) -> TicketCancellationResult: ...
 
     def find_technician_contact(self, category: str) -> dict | None: ...
 
@@ -100,6 +101,19 @@ class NotificationService(Protocol):
         category: str,
         urgency: str,
         scheduled_time: str,
+    ) -> bool: ...
+
+    def notify_technician_lifecycle(
+        self,
+        technician_id: str,
+        action: str,
+        ticket_number: str,
+        tenant: TenantInfo,
+        description: str = "",
+        category: str = "",
+        urgency: str = "",
+        scheduled_time: str = "",
+        reason: str = "",
     ) -> bool: ...
 
 

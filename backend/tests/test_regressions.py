@@ -12,9 +12,16 @@ from backend.src import models, schemas
 from backend.src.database import Base
 from backend.src.agent.context import ConversationContext
 from backend.src.agent.engine import AUTO_GREETING_TEXT, AgentEngine
-from backend.src.agent.types import ConversationSnapshot, ConversationState, HistoryMessage, TenantInfo, TicketResult
+from backend.src.agent.types import (
+    ConversationSnapshot,
+    ConversationState,
+    HistoryMessage,
+    TenantInfo,
+    TicketCancellationResult,
+    TicketResult,
+)
 from backend.src.routers.webhook import greenapi_webhook
-from backend.src.services.adapters import SqlConversationStore, WhatsAppNotificationService
+from backend.src.services.adapters import SqlConversationStore, SqlSchedulingService, WhatsAppNotificationService
 from backend.src.services.buffer import BufferedMessage, MessageBuffer
 from backend.src.services import scheduler as scheduler_mod
 from backend.src.routers.technicians import require_self_technician
@@ -624,18 +631,16 @@ class TicketApiRegressionTests(unittest.TestCase):
             assigned_to="tech-1",
         )
 
-        with (
-            patch("backend.src.routers.tickets.notifier.generate_technician_assignment_message", return_value="message") as generate_message,
-            patch("backend.src.routers.tickets.notifier.notify_technician") as notify_technician,
-        ):
+        with patch("backend.src.routers.tickets.notifier.notify_technician_lifecycle") as notify_lifecycle:
             result = tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
 
         ticket = self.db.query(models.Ticket).filter(models.Ticket.ticket_number == result.id).one()
         self.assertIsNone(ticket.availability_time)
         self.assertEqual(ticket.assigned_to, "tech-1")
         self.assertEqual(ticket.status, models.TicketStatusEnum.assigned)
-        generate_message.assert_called_once()
-        notify_technician.assert_called_once_with(self.db, "tech-1", "message")
+        notify_lifecycle.assert_called_once()
+        self.assertEqual(notify_lifecycle.call_args.kwargs["technician_id"], "tech-1")
+        self.assertEqual(notify_lifecycle.call_args.kwargs["action"], "assigned")
 
     def test_create_ticket_rejects_scheduled_time_without_assignee(self):
         target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
@@ -703,16 +708,15 @@ class TicketApiRegressionTests(unittest.TestCase):
             assigned_to="tech-1",
         )
 
-        with (
-            patch("backend.src.routers.tickets.notifier.generate_technician_assignment_message", return_value="message"),
-            patch("backend.src.routers.tickets.notifier.notify_technician") as notify_technician,
-        ):
+        with patch("backend.src.routers.tickets.notifier.notify_technician_lifecycle") as notify_lifecycle:
             result = tickets_router.create_ticket(body, db=self.db, current_user=self.dispatcher)
 
         ticket = self.db.query(models.Ticket).filter(models.Ticket.ticket_number == result.id).one()
         self.assertEqual(ticket.assigned_to, "tech-1")
         self.assertEqual(ticket.scheduled_time, target_time)
-        notify_technician.assert_called_once_with(self.db, "tech-1", "message")
+        notify_lifecycle.assert_called_once()
+        self.assertEqual(notify_lifecycle.call_args.kwargs["technician_id"], "tech-1")
+        self.assertEqual(notify_lifecycle.call_args.kwargs["action"], "assigned")
 
     def test_update_ticket_changes_description(self):
         self._add_ticket("TKT-DESC", 1, datetime(2026, 5, 17, tzinfo=timezone.utc))
@@ -861,6 +865,38 @@ class TicketApiRegressionTests(unittest.TestCase):
         self.assertTrue(all(slot["technician_id"] == "tech-1" for slot in result))
         self.assertTrue(all(slot["start"].startswith(target_date.isoformat()) for slot in result))
 
+    def test_technician_workload_and_active_count_exclude_cancelled_assigned_tickets(self):
+        scheduled_time = datetime(2026, 6, 8, 11, 0)
+        self._add_ticket(
+            "TKT-ACTIVE-WORKLOAD",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=scheduled_time,
+            assigned_to="tech-1",
+        )
+        cancelled = self._add_ticket(
+            "TKT-CANCELLED-WORKLOAD",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=scheduled_time + timedelta(hours=1),
+            assigned_to="tech-1",
+        )
+        cancelled.status = models.TicketStatusEnum.cancelled
+        self.db.commit()
+
+        workload = technicians_router.get_technician_workload(
+            "tech-1",
+            date_from=None,
+            date_to=None,
+            db=self.db,
+            current_user=self.dispatcher,
+        )
+        techs = technicians_router.get_technicians(db=self.db, current_user=self.dispatcher)
+
+        self.assertEqual([ticket.ticket_number for ticket in workload.tickets], ["TKT-ACTIVE-WORKLOAD"])
+        tech = next(item for item in techs if item["id"] == "tech-1")
+        self.assertEqual(tech["activeTickets"], 1)
+
     def test_update_ticket_rejects_schedule_change_without_assignee(self):
         target_date = (datetime.now(scheduler_mod.TZ_ALMATY) + timedelta(days=1)).date()
         target_time = datetime(target_date.year, target_date.month, target_date.day, 9, 0)
@@ -917,10 +953,7 @@ class TicketApiRegressionTests(unittest.TestCase):
         target_time = datetime(target_date.year, target_date.month, target_date.day, 9, 0)
         self._add_ticket("TKT-RESCHEDULE", 1, datetime.now(timezone.utc), assigned_to="tech-1")
 
-        with (
-            patch("backend.src.routers.tickets.notifier.generate_technician_assignment_message", return_value="message") as generate_message,
-            patch("backend.src.routers.tickets.notifier.notify_technician") as notify_technician,
-        ):
+        with patch("backend.src.routers.tickets.notifier.notify_technician_lifecycle") as notify_lifecycle:
             result = tickets_router.update_ticket(
                 "TKT-RESCHEDULE",
                 {"scheduledDate": target_time.isoformat()},
@@ -929,8 +962,9 @@ class TicketApiRegressionTests(unittest.TestCase):
             )
 
         self.assertEqual(result.scheduledDate, target_time.isoformat())
-        generate_message.assert_called_once()
-        notify_technician.assert_called_once_with(self.db, "tech-1", "message")
+        notify_lifecycle.assert_called_once()
+        self.assertEqual(notify_lifecycle.call_args.kwargs["technician_id"], "tech-1")
+        self.assertEqual(notify_lifecycle.call_args.kwargs["action"], "rescheduled")
 
     def test_delete_ticket_removes_ticket_and_notes(self):
         ticket = self._add_ticket("TKT-DELETE", 1, datetime.now(timezone.utc))
@@ -941,21 +975,78 @@ class TicketApiRegressionTests(unittest.TestCase):
         ))
         self.db.commit()
 
-        result = tickets_router.delete_ticket(
-            "TKT-DELETE",
-            db=self.db,
-            current_user=self.dispatcher,
-        )
+        with patch("backend.src.routers.tickets.notifier.notify_technician_lifecycle") as notify_lifecycle:
+            result = tickets_router.delete_ticket(
+                "TKT-DELETE",
+                db=self.db,
+                current_user=self.dispatcher,
+            )
 
         self.assertEqual(result, {"detail": "Ticket deleted"})
         self.assertEqual(self.db.query(models.Ticket).filter(models.Ticket.ticket_number == "TKT-DELETE").count(), 0)
         self.assertEqual(self.db.query(models.TicketNote).filter(models.TicketNote.ticket_id == ticket.id).count(), 0)
+        notify_lifecycle.assert_not_called()
+
+    def test_delete_ticket_notifies_assigned_technician_before_delete(self):
+        scheduled_time = datetime(2026, 6, 8, 11, 0)
+        self._add_ticket(
+            "TKT-DELETE-ASSIGNED",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=scheduled_time,
+            assigned_to="tech-1",
+        )
+
+        with patch("backend.src.routers.tickets.notifier.notify_technician_lifecycle") as notify_lifecycle:
+            result = tickets_router.delete_ticket(
+                "TKT-DELETE-ASSIGNED",
+                db=self.db,
+                current_user=self.dispatcher,
+            )
+
+        self.assertEqual(result, {"detail": "Ticket deleted"})
+        notify_lifecycle.assert_called_once()
+        kwargs = notify_lifecycle.call_args.kwargs
+        self.assertEqual(kwargs["technician_id"], "tech-1")
+        self.assertEqual(kwargs["action"], "deleted")
+        self.assertEqual(kwargs["scheduled_time"], scheduled_time)
+
+    def test_update_ticket_cancelled_clears_assignment_schedule_and_notifies(self):
+        scheduled_time = datetime(2026, 6, 8, 11, 0)
+        self._add_ticket(
+            "TKT-CANCEL-DISPATCHER",
+            1,
+            datetime.now(timezone.utc),
+            scheduled_time=scheduled_time,
+            assigned_to="tech-1",
+        )
+
+        with patch("backend.src.routers.tickets.notifier.notify_technician_lifecycle") as notify_lifecycle:
+            result = tickets_router.update_ticket(
+                "TKT-CANCEL-DISPATCHER",
+                {"status": "cancelled"},
+                db=self.db,
+                current_user=self.dispatcher,
+            )
+
+        ticket = self.db.query(models.Ticket).filter(models.Ticket.ticket_number == "TKT-CANCEL-DISPATCHER").one()
+        self.assertEqual(ticket.status, models.TicketStatusEnum.cancelled)
+        self.assertIsNone(ticket.assigned_to)
+        self.assertIsNone(ticket.scheduled_time)
+        self.assertIsNone(result.assignedTech)
+        self.assertIsNone(result.scheduledDate)
+        notify_lifecycle.assert_called_once()
+        kwargs = notify_lifecycle.call_args.kwargs
+        self.assertEqual(kwargs["technician_id"], "tech-1")
+        self.assertEqual(kwargs["action"], "cancelled")
+        self.assertEqual(kwargs["scheduled_time"], scheduled_time)
 
 
 class CapturingNotifier:
     def __init__(self):
         self.replies = []
         self.escalations = []
+        self.notifications = []
 
     def send_reply(self, chat_id, text):
         self.replies.append((chat_id, text))
@@ -964,6 +1055,10 @@ class CapturingNotifier:
         self.escalations.append((args, kwargs))
 
     def notify_technician_assigned(self, *args, **kwargs):
+        return True
+
+    def notify_technician_lifecycle(self, *args, **kwargs):
+        self.notifications.append((args, kwargs))
         return True
 
 
@@ -993,6 +1088,10 @@ class RescheduleNotificationTests(unittest.TestCase):
                 self.notifications = []
 
             def notify_technician_assigned(self, **kwargs):
+                self.notifications.append(kwargs)
+                return True
+
+            def notify_technician_lifecycle(self, **kwargs):
                 self.notifications.append(kwargs)
                 return True
 
@@ -1050,11 +1149,97 @@ class RescheduleNotificationTests(unittest.TestCase):
         )
         self.assertEqual(len(notifier.notifications), 1)
         notification = notifier.notifications[0]
-        self.assertEqual(notification["technician_name"], "Technician One")
+        self.assertEqual(notification["technician_id"], "tech-1")
+        self.assertEqual(notification["action"], "rescheduled")
         self.assertEqual(notification["ticket_number"], "TKT-RESCHEDULE")
         self.assertEqual(notification["tenant"], tenant)
         self.assertEqual(notification["scheduled_time"], "2026-05-25T09:00:00+05:00")
         self.assertEqual(ctx.context_data["offered_slots"], [])
+
+
+class BotCancellationTests(unittest.TestCase):
+    def setUp(self):
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        session_factory = sessionmaker(bind=engine)
+        self.db = session_factory()
+        self.db.add_all([
+            models.User(
+                id="tech-1",
+                name="Technician One",
+                email="tech@example.com",
+                phone="+77770000001",
+                password_hash="x",
+                role=models.RoleEnum.technician,
+            ),
+            models.Building(id=1, name="7C", address="Main"),
+            models.Tenant(id=1, name="Tenant", phone="77471046034", apartment="10", building_id=1, agent_enabled=True),
+        ])
+        self.scheduled_time = datetime(2026, 6, 8, 11, 0)
+        self.ticket = models.Ticket(
+            ticket_number="TKT-AF971FA6",
+            tenant_id=1,
+            category="Plumbing",
+            urgency="LOW",
+            description="Leak",
+            status=models.TicketStatusEnum.assigned,
+            assigned_to="tech-1",
+            scheduled_time=self.scheduled_time,
+        )
+        self.db.add(self.ticket)
+        self.db.commit()
+        self.db.refresh(self.ticket)
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_cancel_ticket_clears_assignment_schedule_and_notifies_technician(self):
+        tenant = TenantInfo(
+            id=1,
+            name="Tenant",
+            phone="77471046034",
+            building_name="7C",
+            apartment="10",
+            agent_enabled=True,
+        )
+        snapshot = ConversationSnapshot(
+            id=1,
+            tenant_id=1,
+            chat_id="77471046034@c.us",
+            status="open",
+            state=ConversationState.managing_ticket,
+            scenario=None,
+            context_data={},
+            escalated_at=None,
+            reopened_at=None,
+        )
+        ctx = ConversationContext(snapshot, tenant, "77471046034")
+        notifier = CapturingNotifier()
+        engine = AgentEngine(FakeStore(), SqlSchedulingService(self.db), notifier, FailingLLM())
+
+        result = engine._execute_tool(
+            "cancel_ticket",
+            {"ticket_number": "TKT-AF971FA6"},
+            ctx,
+            [],
+        )
+
+        self.assertEqual(result["status"], "ok")
+        self.db.refresh(self.ticket)
+        self.assertEqual(self.ticket.status, models.TicketStatusEnum.cancelled)
+        self.assertIsNone(self.ticket.assigned_to)
+        self.assertIsNone(self.ticket.scheduled_time)
+        self.assertEqual(len(notifier.notifications), 1)
+        _, kwargs = notifier.notifications[0]
+        self.assertEqual(kwargs["technician_id"], "tech-1")
+        self.assertEqual(kwargs["action"], "cancelled")
+        self.assertEqual(kwargs["ticket_number"], "TKT-AF971FA6")
+        self.assertEqual(kwargs["scheduled_time"], self.scheduled_time.isoformat())
+        self.assertIn("Клиент отменил заявку", kwargs["reason"])
 
 
 class AutoGreetingTests(unittest.TestCase):

@@ -59,37 +59,43 @@ def _get_ticket_or_404(db: Session, ticket_id: str) -> models.Ticket:
     return ticket
 
 
-def _format_technician_scheduled_time(ticket: models.Ticket) -> str:
-    return ticket.scheduled_time.isoformat() if ticket.scheduled_time else "Не назначено"
-
-
 def _today_almaty() -> date:
     return datetime.now(scheduler.TZ_ALMATY).date()
 
 
-def _notify_assigned_technician(db: Session, ticket: models.Ticket) -> None:
-    if not ticket.assigned_to:
+def _notify_ticket_lifecycle(
+    db: Session,
+    ticket: models.Ticket,
+    action: str,
+    technician_id: str | None = None,
+    scheduled_time: datetime | str | None = None,
+    reason: str = "",
+) -> None:
+    target_technician_id = technician_id or ticket.assigned_to
+    if not target_technician_id:
         return
 
     try:
         tenant = ticket.tenant
         building = tenant.building if tenant else None
-        message = notifier.generate_technician_assignment_message(
-            technician_name=ticket.assignee.name if ticket.assignee else "",
+        notifier.notify_technician_lifecycle(
+            db=db,
+            technician_id=target_technician_id,
+            action=action,
             ticket_number=ticket.ticket_number,
             tenant_name=tenant.name if tenant else "N/A",
             building_name=building.name if building else "N/A",
             apartment=tenant.apartment if tenant else "N/A",
+            scheduled_time=scheduled_time if scheduled_time is not None else ticket.scheduled_time,
+            reason=reason,
             description=ticket.description or "",
             category=ticket.category or "General",
             urgency=ticket.urgency or "LOW",
-            scheduled_time=_format_technician_scheduled_time(ticket),
             building_address=building.address if building else "",
             building_house_number=building.house_number if building else "",
             building_floor=building.floor if building else "",
             building_block=building.block if building else "",
         )
-        notifier.notify_technician(db, ticket.assigned_to, message)
     except Exception:
         logger.exception("Failed to notify technician for ticket %s", ticket.ticket_number)
 
@@ -268,7 +274,7 @@ def create_ticket(
     db.commit()
     db.refresh(db_ticket)
     if db_ticket.assigned_to:
-        _notify_assigned_technician(db, db_ticket)
+        _notify_ticket_lifecycle(db, db_ticket, "assigned")
     return format_ticket_detail(db_ticket)
 
 
@@ -309,12 +315,15 @@ def update_ticket(
     current_user: models.User = Depends(get_dispatcher_user)
 ):
     ticket = _get_ticket_or_404(db, ticket_id)
+    previous_assigned_to = ticket.assigned_to
     previous_scheduled_time = ticket.scheduled_time
+    status_cancelled = False
 
     if "status" in ticket_update:
         status_str = ticket_update["status"].lower()
         try:
             ticket.status = models.TicketStatusEnum(status_str)
+            status_cancelled = ticket.status == models.TicketStatusEnum.cancelled
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid status: {ticket_update['status']}")
     
@@ -363,14 +372,37 @@ def update_ticket(
     if "availability_time" in ticket_update:
         ticket.availability_time = ticket_update["availability_time"]
 
+    if status_cancelled:
+        ticket.assigned_to = None
+        ticket.scheduled_time = None
+
     db.commit()
     db.refresh(ticket)
-    if (
-        ("scheduledDate" in ticket_update or "scheduled_time" in ticket_update)
-        and ticket.scheduled_time is not None
-        and ticket.scheduled_time != previous_scheduled_time
-    ):
-        _notify_assigned_technician(db, ticket)
+    if status_cancelled:
+        _notify_ticket_lifecycle(
+            db,
+            ticket,
+            "cancelled",
+            technician_id=previous_assigned_to,
+            scheduled_time=previous_scheduled_time,
+            reason="Заявка отменена диспетчером.",
+        )
+    else:
+        assignee_changed = previous_assigned_to != ticket.assigned_to
+        schedule_changed = ticket.scheduled_time != previous_scheduled_time
+        if previous_assigned_to and assignee_changed:
+            _notify_ticket_lifecycle(
+                db,
+                ticket,
+                "cancelled",
+                technician_id=previous_assigned_to,
+                scheduled_time=previous_scheduled_time,
+                reason="Заявка снята с техника при изменении назначения.",
+            )
+        if ticket.assigned_to and (assignee_changed or (schedule_changed and ticket.scheduled_time is not None)):
+            action = "rescheduled" if not assignee_changed and schedule_changed else "assigned"
+            reason = "Заявка перенесена диспетчером." if action == "rescheduled" else "Заявка назначена диспетчером."
+            _notify_ticket_lifecycle(db, ticket, action, reason=reason)
     return format_ticket_detail(ticket)
 
 
@@ -381,6 +413,14 @@ def delete_ticket(
     current_user: models.User = Depends(get_dispatcher_user),
 ):
     ticket = _get_ticket_or_404(db, ticket_id)
+    _notify_ticket_lifecycle(
+        db,
+        ticket,
+        "deleted",
+        technician_id=ticket.assigned_to,
+        scheduled_time=ticket.scheduled_time,
+        reason="Диспетчер удалил ошибочно созданную заявку.",
+    )
     db.delete(ticket)
     db.commit()
     return {"detail": "Ticket deleted"}

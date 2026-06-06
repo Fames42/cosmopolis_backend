@@ -75,7 +75,12 @@ def get_technicians(
             models.Ticket.assigned_to,
             func.count(models.Ticket.id).label("active_count"),
         )
-        .filter(models.Ticket.status != models.TicketStatusEnum.done)
+        .filter(
+            models.Ticket.status.notin_([
+                models.TicketStatusEnum.done,
+                models.TicketStatusEnum.cancelled,
+            ])
+        )
         .group_by(models.Ticket.assigned_to)
         .subquery()
     )
@@ -197,7 +202,10 @@ def update_technician(
 
     active_count = db.query(models.Ticket).filter(
         models.Ticket.assigned_to == tech.id,
-        models.Ticket.status != models.TicketStatusEnum.done
+        models.Ticket.status.notin_([
+            models.TicketStatusEnum.done,
+            models.TicketStatusEnum.cancelled,
+        ]),
     ).count()
 
     return {
@@ -382,7 +390,10 @@ def get_technician_workload(
     if not tech:
         raise HTTPException(status_code=404, detail="Техник не найден")
 
-    query = db.query(models.Ticket).filter(models.Ticket.assigned_to == tech_id)
+    query = db.query(models.Ticket).filter(
+        models.Ticket.assigned_to == tech_id,
+        models.Ticket.status != models.TicketStatusEnum.cancelled,
+    )
 
     if date_from:
         query = query.filter(models.Ticket.scheduled_time >= datetime.combine(date_from, datetime.min.time()))
@@ -414,7 +425,10 @@ def get_my_tickets(
     current_user: models.User = Depends(get_current_user)
 ):
     require_self_technician(current_user)
-    tickets = db.query(models.Ticket).filter(models.Ticket.assigned_to == current_user.id).all()
+    tickets = db.query(models.Ticket).filter(
+        models.Ticket.assigned_to == current_user.id,
+        models.Ticket.status != models.TicketStatusEnum.cancelled,
+    ).all()
     return [format_tech_list(t) for t in tickets]
 
 @router.get("/me/tickets/{ticket_id}", response_model=schemas.TicketTechnicianDetailResponse)
@@ -426,14 +440,16 @@ def get_my_ticket(
     require_self_technician(current_user)
     ticket = db.query(models.Ticket).filter(
         models.Ticket.ticket_number == ticket_id,
-        models.Ticket.assigned_to == current_user.id
+        models.Ticket.assigned_to == current_user.id,
+        models.Ticket.status != models.TicketStatusEnum.cancelled,
     ).first()
     
     if not ticket:
         if ticket_id.isdigit():
             ticket = db.query(models.Ticket).filter(
                 models.Ticket.id == int(ticket_id),
-                models.Ticket.assigned_to == current_user.id
+                models.Ticket.assigned_to == current_user.id,
+                models.Ticket.status != models.TicketStatusEnum.cancelled,
             ).first()
             
     if not ticket:
@@ -451,14 +467,16 @@ def add_my_ticket_comment(
     require_self_technician(current_user)
     ticket = db.query(models.Ticket).filter(
         models.Ticket.ticket_number == ticket_id,
-        models.Ticket.assigned_to == current_user.id
+        models.Ticket.assigned_to == current_user.id,
+        models.Ticket.status != models.TicketStatusEnum.cancelled,
     ).first()
 
     if not ticket:
         if ticket_id.isdigit():
             ticket = db.query(models.Ticket).filter(
                 models.Ticket.id == int(ticket_id),
-                models.Ticket.assigned_to == current_user.id
+                models.Ticket.assigned_to == current_user.id,
+                models.Ticket.status != models.TicketStatusEnum.cancelled,
             ).first()
 
     if not ticket:
@@ -485,14 +503,16 @@ def update_my_ticket_status(
     require_self_technician(current_user)
     ticket = db.query(models.Ticket).filter(
         models.Ticket.ticket_number == ticket_id,
-        models.Ticket.assigned_to == current_user.id
+        models.Ticket.assigned_to == current_user.id,
+        models.Ticket.status != models.TicketStatusEnum.cancelled,
     ).first()
     
     if not ticket:
         if ticket_id.isdigit():
             ticket = db.query(models.Ticket).filter(
                 models.Ticket.id == int(ticket_id),
-                models.Ticket.assigned_to == current_user.id
+                models.Ticket.assigned_to == current_user.id,
+                models.Ticket.status != models.TicketStatusEnum.cancelled,
             ).first()
             
     if not ticket:
